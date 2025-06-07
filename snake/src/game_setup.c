@@ -92,6 +92,8 @@ enum board_init_status initialize_game(int** cells_p, size_t* width_p,
                                        char* board_rep) {
 
     enum board_init_status status = initialize_default_board(cells_p, width_p, height_p);
+    place_food(*cells_p, *width_p, *height_p);
+
     if(status == INIT_SUCCESS)
     {
         g_game_over = 0;

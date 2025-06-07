@@ -32,12 +32,8 @@ void update(int* cells, size_t width, size_t height, snake_t* snake_p,
     // walls, so it does not handle the case where a snake runs off the board.
 
     enum input_key dir = user_input;
-    int pos = snake_p->pos;
-    int has_snake = cells[pos] & FLAG_SNAKE;
-    if(has_snake && cells[pos+1] != FLAG_WALL)
-    {
-        cells[pos] = cells[pos] ^ FLAG_SNAKE;
-    }
+    int orig_pos = snake_p->pos;
+    int next_pos = orig_pos;
 
     if(dir == INPUT_NONE)
     {
@@ -54,30 +50,54 @@ void update(int* cells, size_t width, size_t height, snake_t* snake_p,
 
     if(dir == INPUT_RIGHT)
     {
-        pos += 1;
+        next_pos += 1;
     }
     if(dir == INPUT_LEFT)
     {
-        pos -= 1;
+        next_pos -= 1;
     }
     if(dir == INPUT_UP) {
-        pos -= width;
+        next_pos -= width;
     }
     if(dir == INPUT_DOWN) {
-        pos += width;
+        next_pos += width;
     }
 
     if(dir == INPUT_NONE) {
-        pos += 1;
+        next_pos += 1;
     }
 
-    if(cells[pos] == FLAG_WALL)
+    int has_snake = cells[orig_pos] & FLAG_SNAKE;
+    int has_food = cells[orig_pos] & FLAG_FOOD;
+
+    // If the cell has snake, removing from existing cell.
+    if(has_snake && cells[next_pos] != FLAG_WALL)
+    {
+        // Not removing the snake if next cell is Wall.
+        cells[orig_pos] = cells[orig_pos] ^ FLAG_SNAKE;
+    }
+
+    // If the cell has food, removing the food as it's eaten
+    if(has_food)
+    {
+        cells[orig_pos] = cells[orig_pos] ^ FLAG_FOOD;
+    }
+
+    if(cells[next_pos] == FLAG_WALL)
     {
         g_game_over = 1;
     }
     else {
-        cells[pos] = cells[pos] | FLAG_SNAKE;
-        snake_p->pos = pos;
+        // Updating the next cell with snake positioion
+        cells[next_pos] = cells[next_pos] | FLAG_SNAKE;
+        // if cell has food, increasing score and placing new food. ( Meaning snake is eating the food )
+        has_food = cells[next_pos] & FLAG_FOOD;
+        if(has_food)
+        {
+            g_score += 1;
+            place_food(cells, width, height);
+        }
+        snake_p->pos = next_pos;
     }
 
 }
