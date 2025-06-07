@@ -5,12 +5,13 @@ FLAGS = -ggdb3 -Wall -Wextra -Wshadow -std=gnu11 -Wno-unused-parameter -Wno-unus
 # OS to account for this
 HOST_SYSTEM = $(shell uname | cut -f 1 -d_)
 SYSTEM ?= $(HOST_SYSTEM)
+$(info This is an informational message outside any target. $(HOST_SYSTEM))
 ifeq ($(SYSTEM),Darwin)
 LIBS = -lncurses
 FLAGS += -D_XOPEN_SOURCE_EXTENDED
 else
-LIBS = $(shell ncursesw5-config --libs)
-FLAGS += $(shell ncursesw5-config --cflags)
+LIBS = $(shell ncursesw6-config --libs)
+FLAGS += $(shell ncursesw6-config --cflags)
 endif
 
 FILES = $(wildcard src/*.c) $(wildcard src/*.h)
@@ -81,6 +82,7 @@ format:
 	clang-format -style=file -i $(FILES)
 
 clean:
+	@echo "Putting echo for cleaning up"
 	rm -f $(BINS)
 	rm -f ${OBJS}
 

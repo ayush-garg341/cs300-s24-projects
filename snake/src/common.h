@@ -44,6 +44,8 @@ extern int g_score;      // game score: 1 point for every food eaten
 typedef struct snake {
     // TODO: Define your snake struct! (in ')
     // Store any necessary information about your snake here.
+    int pos;
+    enum input_key dir;
 } snake_t;
 
 void set_seed(unsigned seed);

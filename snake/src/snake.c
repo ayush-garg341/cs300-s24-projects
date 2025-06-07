@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
     size_t width;   // the width of the board.
     size_t height;  // the height of the board.
     int* cells;     // a pointer to the first integer in an array of integers
-                    // representing each board cell.
+    // representing each board cell.
 
     // snake data (only used in part 3!)
     snake_t snake;    // your snake struct. (not used until part 3!)
@@ -75,33 +75,33 @@ int main(int argc, char** argv) {
 
     // initialize board from command line arguments
     switch (argc) {
-        case (2):
-            snake_grows = atoi(argv[1]);
-            if (snake_grows != 1 && snake_grows != 0) {
-                printf(
-                    "snake_grows must be either 1 (grows) or 0 (does not "
-                    "grow)\n");
-                return 0;
-            }
+    case (2):
+        snake_grows = atoi(argv[1]);
+        if (snake_grows != 1 && snake_grows != 0) {
+            printf(
+                "snake_grows must be either 1 (grows) or 0 (does not "
+                "grow)\n");
+            return 0;
+        }
+        status = initialize_game(&cells, &width, &height, &snake, NULL);
+        break;
+    case (3):
+        snake_grows = atoi(argv[1]);
+        if (snake_grows != 1 && snake_grows != 0) {
+            printf(
+                "snake_grows must be either 1 (grows) or 0 (does not "
+                "grow)\n");
+            return 0;
+        } else if (*argv[2] == '\0') {
             status = initialize_game(&cells, &width, &height, &snake, NULL);
             break;
-        case (3):
-            snake_grows = atoi(argv[1]);
-            if (snake_grows != 1 && snake_grows != 0) {
-                printf(
-                    "snake_grows must be either 1 (grows) or 0 (does not "
-                    "grow)\n");
-                return 0;
-            } else if (*argv[2] == '\0') {
-                status = initialize_game(&cells, &width, &height, &snake, NULL);
-                break;
-            }
-            status = initialize_game(&cells, &width, &height, &snake, argv[2]);
-            break;
-        case (1):
-        default:
-            printf("usage: snake <GROWS: 0|1> [BOARD STRING]\n");
-            return 0;
+        }
+        status = initialize_game(&cells, &width, &height, &snake, argv[2]);
+        break;
+    case (1):
+    default:
+        printf("usage: snake <GROWS: 0|1> [BOARD STRING]\n");
+        return 0;
     }
 
     // ----------- DO NOT MODIFY ANYTHING IN `main` ABOVE THIS LINE -----------
@@ -119,15 +119,21 @@ int main(int argc, char** argv) {
 
     // TODO: Remove this message, uncomment the code below this message
     //       and implement Part 1A here.
-    printf(
-        "             ____   \n"
-        "Hello       / . .\\ \n"
-        "CS 300      \\  ---<\n"
-        "student!     \\  /  \n"
-        "   __________/ /    \n"
-        "-=:___________/\n");
+    // printf(
+    //     "             ____   \n"
+    //     "Hello       / . .\\ \n"
+    //     "CS 300      \\  ---<\n"
+    //     "student!     \\  /  \n"
+    //     "   __________/ /    \n"
+    //     "-=:___________/\n");
+    initialize_window(width, height);
+    while(!g_game_over)
+    {
+        enum input_key user_input = get_input();
+        update(cells, width, height, &snake, user_input, 0);
+        render_game(cells, width, height);
+        usleep(100000);
 
-    // initialize_window(width, height);
-    // TODO: implement the game loop here (Part 1A)!
-    // end_game(cells, width, height, &snake);
+    }
+    end_game(cells, width, height, &snake);
 }

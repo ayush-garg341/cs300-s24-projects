@@ -36,7 +36,7 @@
  *              height should be stored.
  */
 enum board_init_status initialize_default_board(int** cells_p, size_t* width_p,
-                                                size_t* height_p) {
+        size_t* height_p) {
     *width_p = 20;
     *height_p = 10;
     int* cells = malloc(20 * 10 * sizeof(int));
@@ -90,9 +90,18 @@ enum board_init_status initialize_default_board(int** cells_p, size_t* width_p,
 enum board_init_status initialize_game(int** cells_p, size_t* width_p,
                                        size_t* height_p, snake_t* snake_p,
                                        char* board_rep) {
-    // TODO: implement!
 
-    return INIT_SUCCESS;
+    enum board_init_status status = initialize_default_board(cells_p, width_p, height_p);
+    if(status == INIT_SUCCESS)
+    {
+        g_game_over = 0;
+        g_score = 0;
+    }
+
+    snake_p->pos = 42;
+    snake_p->dir = INPUT_RIGHT;
+
+    return status;
 }
 
 /** Takes in a string `compressed` and initializes values pointed to by
@@ -109,8 +118,8 @@ enum board_init_status initialize_game(int** cells_p, size_t* width_p,
  * of times dictated by the number that follows the letter.
  */
 enum board_init_status decompress_board_str(int** cells_p, size_t* width_p,
-                                            size_t* height_p, snake_t* snake_p,
-                                            char* compressed) {
+        size_t* height_p, snake_t* snake_p,
+        char* compressed) {
     // TODO: implement!
     return INIT_UNIMPLEMENTED;
 }

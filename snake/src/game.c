@@ -31,7 +31,23 @@ void update(int* cells, size_t width, size_t height, snake_t* snake_p,
     // increases by 1. This function assumes that the board is surrounded by
     // walls, so it does not handle the case where a snake runs off the board.
 
-    // TODO: implement!
+    // enum input_key dir = snake_p->dir;
+    int pos = snake_p->pos;
+    int has_snake = cells[pos] & FLAG_SNAKE;
+    if(has_snake && cells[pos+1] != FLAG_WALL)
+    {
+        cells[pos] = cells[pos] ^ FLAG_SNAKE;
+    }
+    pos += 1;
+    if(cells[pos] == FLAG_WALL)
+    {
+        g_game_over = 1;
+    }
+    else {
+        cells[pos] = cells[pos] | FLAG_SNAKE;
+        snake_p->pos = pos;
+    }
+
 }
 
 /** Sets a random space on the given board to food.
@@ -72,4 +88,6 @@ void read_name(char* write_into) {
  */
 void teardown(int* cells, snake_t* snake_p) {
     // TODO: implement!
+    free(cells);
+    // free(snake_p);
 }
