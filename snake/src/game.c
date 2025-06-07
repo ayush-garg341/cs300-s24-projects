@@ -22,7 +22,7 @@
  *  - growing: 0 if the snake does not grow on eating, 1 if it does.
  */
 void update(int* cells, size_t width, size_t height, snake_t* snake_p,
-            enum input_key input, int growing) {
+            enum input_key user_input, int growing) {
     // `update` should update the board, your snake's data, and global
     // variables representing game information to reflect new state. If in the
     // updated position, the snake runs into a wall or itself, it will not move
@@ -31,14 +31,46 @@ void update(int* cells, size_t width, size_t height, snake_t* snake_p,
     // increases by 1. This function assumes that the board is surrounded by
     // walls, so it does not handle the case where a snake runs off the board.
 
-    // enum input_key dir = snake_p->dir;
+    enum input_key dir = user_input;
     int pos = snake_p->pos;
     int has_snake = cells[pos] & FLAG_SNAKE;
     if(has_snake && cells[pos+1] != FLAG_WALL)
     {
         cells[pos] = cells[pos] ^ FLAG_SNAKE;
     }
-    pos += 1;
+
+    if(dir == INPUT_NONE)
+    {
+        dir = snake_p->dir;
+        if(dir == INPUT_NONE)
+        {
+            dir = INPUT_RIGHT;
+            snake_p->dir = dir;
+        }
+    }
+    else {
+        snake_p->dir = dir;
+    }
+
+    if(dir == INPUT_RIGHT)
+    {
+        pos += 1;
+    }
+    if(dir == INPUT_LEFT)
+    {
+        pos -= 1;
+    }
+    if(dir == INPUT_UP) {
+        pos -= width;
+    }
+    if(dir == INPUT_DOWN) {
+        pos += width;
+    }
+
+    if(dir == INPUT_NONE) {
+        pos += 1;
+    }
+
     if(cells[pos] == FLAG_WALL)
     {
         g_game_over = 1;
