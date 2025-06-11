@@ -91,17 +91,32 @@ enum board_init_status initialize_game(int** cells_p, size_t* width_p,
                                        size_t* height_p, snake_t* snake_p,
                                        char* board_rep) {
 
-    enum board_init_status status = initialize_default_board(cells_p, width_p, height_p);
-    place_food(*cells_p, *width_p, *height_p);
-
-    if(status == INIT_SUCCESS)
+    enum board_init_status status;
+    if(board_rep == NULL)
     {
-        g_game_over = 0;
-        g_score = 0;
-    }
+        status = initialize_default_board(cells_p, width_p, height_p);
+        place_food(*cells_p, *width_p, *height_p);
 
-    snake_p->pos = 42;
-    snake_p->dir = INPUT_RIGHT;
+        if(status == INIT_SUCCESS)
+        {
+            g_game_over = 0;
+            g_score = 0;
+        }
+
+        snake_p->pos = 42;
+        snake_p->dir = INPUT_RIGHT;
+
+    }
+    else {
+        status = decompress_board_str(cells_p, width_p, height_p, snake_p, board_rep);
+        if(status == INIT_SUCCESS)
+        {
+            place_food(*cells_p, *width_p, *height_p);
+            g_game_over = 0;
+            g_score = 0;
+        }
+        snake_p->dir = INPUT_RIGHT;
+    }
 
     return status;
 }
@@ -122,6 +137,219 @@ enum board_init_status initialize_game(int** cells_p, size_t* width_p,
 enum board_init_status decompress_board_str(int** cells_p, size_t* width_p,
         size_t* height_p, snake_t* snake_p,
         char* compressed) {
-    // TODO: implement!
-    return INIT_UNIMPLEMENTED;
+
+    int snake_count = 0;
+    char *parts_tokenizer = "|";
+    char *rows_ptr;
+
+    char *token = strtok_r(compressed, parts_tokenizer, &rows_ptr);
+    char *token_copy = substr(token, 0, strlen(token));
+    enum board_init_status status = set_dimensions(width_p, height_p, token_copy);
+    free(token_copy);
+    if(status != INIT_SUCCESS)
+    {
+        return status;
+    }
+
+    int board_size = *width_p * *height_p;
+
+    printf("Width: %ld, height: %ld, board size: %d\n", *width_p, *height_p, board_size);
+
+    int* cells = malloc(board_size * sizeof(int));
+    *cells_p = cells;
+
+    size_t rows = 0;
+
+    while(token != NULL)
+    {
+        token = strtok_r(NULL, parts_tokenizer, &rows_ptr);
+        if(token != NULL)
+        {
+            rows += 1;
+            if(rows > *height_p)
+            {
+                return INIT_ERR_INCORRECT_DIMENSIONS;
+            }
+            RowResult rr = process_row(token, cells, *width_p, rows);
+            if(rr.has_bad_character)
+            {
+                return INIT_ERR_BAD_CHAR;
+            }
+            if(rr.cols != *width_p)
+            {
+                return INIT_ERR_INCORRECT_DIMENSIONS;
+            }
+            if(rr.snake_count > 0)
+            {
+                snake_p->pos = rr.snake_pos;
+                snake_count += rr.snake_count;
+                if(snake_count > 1)
+                {
+                    return INIT_ERR_WRONG_SNAKE_NUM;
+                }
+            }
+        }
+    }
+
+    if(snake_count == 0)
+    {
+        return INIT_ERR_WRONG_SNAKE_NUM;
+    }
+
+    if(rows != *height_p)
+    {
+        return INIT_ERR_INCORRECT_DIMENSIONS;
+    }
+
+
+    return INIT_SUCCESS;
+}
+
+enum board_init_status set_dimensions(size_t* width_p, size_t* height_p, char* board_dimension) {
+
+    char *row_string;
+    char *column_string;
+    char *dimension_tokenizer = "x";
+    char *board_ptr;
+    char *token = strtok_r(board_dimension, dimension_tokenizer, &board_ptr);
+    row_string = token;
+
+    token = strtok_r(NULL, dimension_tokenizer, &board_ptr);
+    column_string = token;
+    if(column_string == NULL)
+    {
+        return INIT_ERR_BOARD_DIMENSION_PARSING;
+    }
+
+    if(row_string[0] != 'B')
+    {
+        return INIT_ERR_BOARD_DIMENSION_PARSING;
+    }
+
+    int row_count = get_num_from_string(row_string+1);
+
+    int column_count = get_num_from_string(column_string);
+
+    *height_p = row_count;
+    *width_p = column_count;
+
+    return INIT_SUCCESS;
+}
+
+int get_num_from_string(char *string)
+{
+    int count = 0;
+    for(int i=0; string[i] != '\0'; i++)
+    {
+        count = count * 10 + string[i] - '0';
+    }
+
+    return count;
+}
+
+RowResult process_row(char *string, int *cells, int width, int height)
+{
+    RowResult rr;
+    bool length_found = false;
+    int start = 0;
+    int length_str = 0;
+    int total_cols_processed = 0;
+    int snake_count = 0;
+    int cell_pos = (height - 1) * width;
+    char prev_c = '\0';
+
+    for(int i = 0; string[i] != '\0'; i++)
+    {
+        char c = string[i];
+        if(prev_c == '\0')
+        {
+            prev_c = c;
+        }
+
+        if(c >= '0' && c <= '9') {
+            // Process characters 0-9
+            length_str += 1;
+            length_found = true;
+            if(start == -1)
+            {
+                start = i;
+            }
+        }
+        if(c == 'W' || c == 'E' || c == 'S' || c == 'G' || string[i+1] == '\0')
+        {
+            // Process walls, empty cells, snake and grass.
+            if(length_found)
+            {
+                char *numeric_str = substr(string, start, length_str);
+                int length = get_num_from_string(numeric_str);
+                free(numeric_str);
+                total_cols_processed += length;
+                if(total_cols_processed > width)
+                {
+                    rr.cols = total_cols_processed;
+                    break;
+                }
+                if(prev_c == 'W')
+                {
+                    for(int j = cell_pos; j < cell_pos + length; j++)
+                    {
+                        cells[j] = FLAG_WALL;
+                    }
+
+                    cell_pos += length;
+                }
+                if(prev_c == 'E')
+                {
+                    for(int j = cell_pos; j < cell_pos + length; j++)
+                    {
+                        cells[j] = PLAIN_CELL;
+                    }
+                    cell_pos += length;
+
+                }
+                if(prev_c == 'S')
+                {
+                    snake_count += length;
+                    for(int j = cell_pos; j < cell_pos + length; j++)
+                    {
+                        cells[j] = FLAG_SNAKE;
+                        rr.snake_pos = j;
+                    }
+                    cell_pos += length;
+                }
+                if(prev_c == 'G')
+                {
+                    for(int j = cell_pos; j < cell_pos + length; j++)
+                    {
+                        cells[j] = FLAG_GRASS;
+                    }
+                    cell_pos += length;
+                }
+            }
+            prev_c = c;
+            start = -1;
+            length_str = 0;
+        }
+        else if (c < '0' || c > '9') {
+            rr.has_bad_character = true;
+            break;
+        }
+    }
+    rr.cols = total_cols_processed;
+    rr.snake_count = snake_count;
+
+    return rr;
+}
+
+char *substr(const char *str, int start, int length) {
+    if (start < 0 || length < 0 || (size_t)(start + length) > strlen(str)) {
+        return NULL;  // Handle out-of-bounds
+    }
+
+    char *result = malloc(length + 1); // +1 for null terminator
+    if (result == NULL) return NULL;
+
+    strncpy(result, str + start, length);
+    result[length] = '\0'; // Null-terminate
+    return result;
 }
