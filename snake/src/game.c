@@ -32,7 +32,7 @@ void update(int* cells, size_t width, size_t height, snake_t* snake_p,
     // walls, so it does not handle the case where a snake runs off the board.
 
     enum input_key dir = user_input;
-    int orig_pos = snake_p->pos;
+    int orig_pos = *(int *)get_first(snake_p->head);
     int next_pos = orig_pos;
 
     if(dir == INPUT_NONE)
@@ -97,7 +97,7 @@ void update(int* cells, size_t width, size_t height, snake_t* snake_p,
             g_score += 1;
             place_food(cells, width, height);
         }
-        snake_p->pos = next_pos;
+        *(int *)(snake_p->head->data) = next_pos;
     }
 
 }
@@ -141,5 +141,9 @@ void read_name(char* write_into) {
 void teardown(int* cells, snake_t* snake_p) {
     // TODO: implement!
     free(cells);
-    // free(snake_p);
+
+    if (snake_p && snake_p->head) {
+        free(snake_p->head->data);
+        free(snake_p->head);
+    }
 }

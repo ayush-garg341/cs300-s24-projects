@@ -1,6 +1,7 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+#include "linked_list.h"
 #include <stddef.h>
 
 // Let's see if we can keep this as simple as possible, lest we intimidate
@@ -42,7 +43,7 @@ extern int g_score;      // game score: 1 point for every food eaten
  *  - None yet!
  */
 typedef struct snake {
-    int pos;
+    node_t *head;
     enum input_key dir;
 } snake_t;
 

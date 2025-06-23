@@ -101,10 +101,14 @@ enum board_init_status initialize_game(int** cells_p, size_t* width_p,
         {
             g_game_over = 0;
             g_score = 0;
-        }
 
-        snake_p->pos = 42;
-        snake_p->dir = INPUT_RIGHT;
+            // Initialize snake if no error
+            int pos = 42;
+            node_t* snake_head = NULL;
+            insert_first(&snake_head, &pos, sizeof(int));
+            snake_p->head = snake_head;
+            snake_p->dir = INPUT_RIGHT;
+        }
 
     }
     else {
@@ -139,6 +143,7 @@ enum board_init_status decompress_board_str(int** cells_p, size_t* width_p,
         char* compressed) {
 
     int snake_count = 0;
+    int snake_pos = 0;
     char *parts_tokenizer = "|";
     char *rows_ptr;
 
@@ -181,8 +186,8 @@ enum board_init_status decompress_board_str(int** cells_p, size_t* width_p,
             }
             if(rr.snake_count > 0)
             {
-                snake_p->pos = rr.snake_pos;
                 snake_count += rr.snake_count;
+                snake_pos = rr.snake_pos;
                 if(snake_count > 1)
                 {
                     return INIT_ERR_WRONG_SNAKE_NUM;
@@ -199,6 +204,15 @@ enum board_init_status decompress_board_str(int** cells_p, size_t* width_p,
     if(rows != *height_p)
     {
         return INIT_ERR_INCORRECT_DIMENSIONS;
+    }
+
+    if(status == INIT_SUCCESS)
+    {
+        int pos = snake_pos;
+        node_t* snake_head = NULL;
+        insert_first(&snake_head, &pos, sizeof(int));
+        snake_p->head = snake_head;
+
     }
 
 
