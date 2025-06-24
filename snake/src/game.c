@@ -23,13 +23,6 @@
  */
 void update(int* cells, size_t width, size_t height, snake_t* snake_p,
             enum input_key user_input, int growing) {
-    // `update` should update the board, your snake's data, and global
-    // variables representing game information to reflect new state. If in the
-    // updated position, the snake runs into a wall or itself, it will not move
-    // and global variable g_game_over will be 1. Otherwise, it will be moved
-    // to the new position. If the snake eats food, the game score (`g_score`)
-    // increases by 1. This function assumes that the board is surrounded by
-    // walls, so it does not handle the case where a snake runs off the board.
 
     enum input_key dir = user_input;
     int orig_pos = *(int *)get_first(snake_p->head);
@@ -45,7 +38,20 @@ void update(int* cells, size_t width, size_t height, snake_t* snake_p,
         }
     }
     else {
-        snake_p->dir = dir;
+        // Snake cannot double back on itself
+        if(g_score > 0 && growing == 1)
+        {
+            if((dir == INPUT_RIGHT && snake_p->dir == INPUT_LEFT) || (dir == INPUT_LEFT && snake_p->dir == INPUT_RIGHT) || (dir == INPUT_UP && snake_p->dir == INPUT_DOWN) || (dir == INPUT_DOWN && snake_p->dir == INPUT_UP))
+            {
+                dir = snake_p->dir;
+            }
+            else {
+                snake_p->dir = dir;
+            }
+        }
+        else {
+            snake_p->dir = dir;
+        }
     }
 
     if(dir == INPUT_RIGHT)
@@ -71,7 +77,7 @@ void update(int* cells, size_t width, size_t height, snake_t* snake_p,
     int has_food = cells[orig_pos] & FLAG_FOOD;
 
     // If the cell has snake, removing from existing cell.
-    if(has_snake && cells[next_pos] != FLAG_WALL)
+    if(has_snake && cells[next_pos] != FLAG_WALL && (growing == 0 || g_score == 0))
     {
         // Not removing the snake if next cell is Wall.
         cells[orig_pos] = cells[orig_pos] ^ FLAG_SNAKE;
@@ -92,12 +98,45 @@ void update(int* cells, size_t width, size_t height, snake_t* snake_p,
         cells[next_pos] = cells[next_pos] | FLAG_SNAKE;
         // if cell has food, increasing score and placing new food. ( Meaning snake is eating the food )
         has_food = cells[next_pos] & FLAG_FOOD;
+        // printf("Next pos = %d\n", next_pos);
         if(has_food)
         {
+            if(growing == 1)
+            {
+                cells[orig_pos] = cells[orig_pos] | FLAG_SNAKE;
+            }
             g_score += 1;
+            // printf("food eaten\n");
+            insert_first(&snake_p->head, &next_pos, sizeof(int));
             place_food(cells, width, height);
         }
-        *(int *)(snake_p->head->data) = next_pos;
+        else {
+            if(g_score > 0 && growing == 1)
+            {
+
+                // removing last node from list
+                void* data = remove_last(&snake_p->head);
+                int last_pos = *(int *)data;
+                // printf("last pos = %d\n", last_pos);
+
+                // Remove snake from last pos of cells
+                cells[last_pos] = cells[last_pos] ^ FLAG_SNAKE;
+
+                free(data);
+
+                // Adding snake back if first and last pos are same
+                if(next_pos == last_pos)
+                {
+                    cells[next_pos] = cells[next_pos] | FLAG_SNAKE;
+                }
+                // inserting node at the head new position
+                insert_first(&snake_p->head, &next_pos, sizeof(int));
+
+            }
+            else {
+                *(int *)(snake_p->head->data) = next_pos;
+            }
+        }
     }
 
 }
@@ -143,7 +182,14 @@ void teardown(int* cells, snake_t* snake_p) {
     free(cells);
 
     if (snake_p && snake_p->head) {
-        free(snake_p->head->data);
-        free(snake_p->head);
+        node_t* head = snake_p->head;
+        node_t *next = NULL;
+        while(head != NULL)
+        {
+            next = head->next;
+            free(head->data);
+            free(head);
+            head = next;
+        }
     }
 }

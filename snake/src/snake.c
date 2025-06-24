@@ -130,7 +130,7 @@ int main(int argc, char** argv) {
     while(!g_game_over)
     {
         enum input_key user_input = get_input();
-        update(cells, width, height, &snake, user_input, 0);
+        update(cells, width, height, &snake, user_input, snake_grows);
         render_game(cells, width, height);
         usleep(100000);
 
