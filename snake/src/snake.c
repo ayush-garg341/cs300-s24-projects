@@ -111,7 +111,9 @@ int main(int argc, char** argv) {
     char name_buffer[1000];
     read_name(name_buffer);
     // ? save name_buffer ?
-    // ? save mbslen(name_buffer) ?
+    size_t len = mbslen(name_buffer);
+    g_name_len = len;
+    g_name = name_buffer;
 
     initialize_window(width, height);
     while(!g_game_over)

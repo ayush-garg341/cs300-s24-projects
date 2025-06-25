@@ -1,6 +1,7 @@
 #include "mbstrings.h"
 
 #include <stddef.h>
+#include <stdbool.h>
 
 /* mbslen - multi-byte string length
  * - Description: returns the number of UTF-8 code points ("characters")
@@ -24,7 +25,55 @@
  *
  * You will need bitwise operations for this part of the assignment!
  */
-size_t mbslen(const char* bytes) {
-    // TODO: implement!
-    return 0;
+
+bool is_valid_utf8(const char *s) {
+    while (*s) {
+        unsigned char c = *s;
+
+        if (c <= 0x7F) {
+            // 1-byte (ASCII)
+            s++;
+        } else if ((c & 0xE0) == 0xC0) {
+            // 2-byte sequence
+            if ((s[1] & 0xC0) != 0x80) return false;
+            if (c < 0xC2) return false;  // overlong encoding
+            s += 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            // 3-byte sequence
+            if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80) return false;
+            if (c == 0xE0 && (s[1] & 0xE0) == 0x80) return false; // overlong
+            if (c == 0xED && (s[1] & 0xE0) == 0xA0) return false; // UTF-16 surrogates
+            s += 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            // 4-byte sequence
+            if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80 || (s[3] & 0xC0) != 0x80) return false;
+            if (c == 0xF0 && (s[1] & 0xF0) == 0x80) return false; // overlong
+            if (c > 0xF4) return false; // out of Unicode range
+            s += 4;
+        } else {
+            // Invalid first byte
+            return false;
+        }
+    }
+    return true;
 }
+
+size_t mbslen(const char* bytes) {
+    int code_points = 0;
+    if(bytes == NULL) {
+        return -1;
+    }
+    if(!is_valid_utf8(bytes)) {
+        return -1;
+    }
+    while(*bytes)
+    {
+        if((unsigned char)*bytes >> 6 != 0b10)
+        {
+            code_points++;
+        }
+        bytes++; // go to the next byte, not next character
+    }
+    return code_points;
+}
+
