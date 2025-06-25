@@ -113,8 +113,12 @@ void update(int* cells, size_t width, size_t height, snake_t* snake_p,
             g_score += 1;
             // printf("food eaten\n");
 
-            // Do optimization here if snake is not growing..
-            insert_first(&snake_p->head, &next_pos, sizeof(int));
+            if(growing == 1) {
+                insert_first(&snake_p->head, &next_pos, sizeof(int));
+            }
+            else {
+                *(int *)(snake_p->head->data) = next_pos;
+            }
 
             place_food(cells, width, height);
         }
@@ -122,7 +126,7 @@ void update(int* cells, size_t width, size_t height, snake_t* snake_p,
             if(g_score > 0 && growing == 1)
             {
 
-
+                // if no food found and snake is growing, we have to update the head and tail of the snake by removing tail and updating the head to the new position
                 // removing last node from list
                 void* data = remove_last(&snake_p->head);
                 int last_pos = *(int *)data;
