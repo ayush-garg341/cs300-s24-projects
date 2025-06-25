@@ -183,9 +183,35 @@ void place_food(int* cells, size_t width, size_t height) {
  *  - `write_into`: a pointer to the buffer to be written into.
  */
 void read_name(char* write_into) {
-    // TODO: implement! (remove the call to strcpy once you begin your
-    // implementation)
-    strcpy(write_into, "placeholder");
+
+    ssize_t nbytes;
+    while(1) {
+
+        // Write is unbuffered, printf is buffered
+        write(1, "Name > ", 7);
+        nbytes = read(0, write_into, 1000);
+        if (nbytes < 0) {
+            perror("read failed");
+            return;
+        }
+        write_into[nbytes] = '\0';
+
+        // Trim trailing newline if present
+        if (nbytes > 0 && write_into[nbytes - 1] == '\n') {
+            write_into[nbytes - 1] = '\0';
+        }
+
+        // Check if the input is empty after trimming
+        if (strlen(write_into) == 0) {
+            write(1, "Name Invalid: must be longer than 0 characters.\n", 48);
+            continue;
+        }
+
+        break;
+    }
+    fflush(0);
+
+    return;
 }
 
 /** Cleans up on game over — should free any allocated memory so that the
