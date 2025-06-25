@@ -24,6 +24,9 @@
 void update(int* cells, size_t width, size_t height, snake_t* snake_p,
             enum input_key user_input, int growing) {
 
+    if(g_game_over) {
+        return;
+    }
     enum input_key dir = user_input;
     int orig_pos = *(int *)get_first(snake_p->head);
     int next_pos = orig_pos;
@@ -92,48 +95,59 @@ void update(int* cells, size_t width, size_t height, snake_t* snake_p,
     if(cells[next_pos] == FLAG_WALL)
     {
         g_game_over = 1;
+        return;
     }
     else {
-        // Updating the next cell with snake positioion
-        cells[next_pos] = cells[next_pos] | FLAG_SNAKE;
         // if cell has food, increasing score and placing new food. ( Meaning snake is eating the food )
         has_food = cells[next_pos] & FLAG_FOOD;
         // printf("Next pos = %d\n", next_pos);
         if(has_food)
         {
+            // Updating the next cell with snake positioion
+            cells[next_pos] = cells[next_pos] | FLAG_SNAKE;
+
             if(growing == 1)
             {
                 cells[orig_pos] = cells[orig_pos] | FLAG_SNAKE;
             }
             g_score += 1;
             // printf("food eaten\n");
+
+            // Do optimization here if snake is not growing..
             insert_first(&snake_p->head, &next_pos, sizeof(int));
+
             place_food(cells, width, height);
         }
         else {
             if(g_score > 0 && growing == 1)
             {
 
+
                 // removing last node from list
                 void* data = remove_last(&snake_p->head);
                 int last_pos = *(int *)data;
+                free(data);
                 // printf("last pos = %d\n", last_pos);
+
+                // Growing snake colliding with itself causing game over
+                // We have to check if linked list already has element at that position or it may be inside the grass.
+                if(next_pos != last_pos && cells[next_pos] & FLAG_SNAKE) {
+                    g_game_over = 1;
+                    return;
+                }
 
                 // Remove snake from last pos of cells
                 cells[last_pos] = cells[last_pos] ^ FLAG_SNAKE;
 
-                free(data);
+                // Update the next pos with snake
+                cells[next_pos] = cells[next_pos] | FLAG_SNAKE;
 
-                // Adding snake back if first and last pos are same
-                if(next_pos == last_pos)
-                {
-                    cells[next_pos] = cells[next_pos] | FLAG_SNAKE;
-                }
                 // inserting node at the head new position
                 insert_first(&snake_p->head, &next_pos, sizeof(int));
 
             }
             else {
+                cells[next_pos] = cells[next_pos] | FLAG_SNAKE;
                 *(int *)(snake_p->head->data) = next_pos;
             }
         }
