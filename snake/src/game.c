@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stddef.h>
+#include <ncurses.h>
 
 #include "linked_list.h"
 #include "mbstrings.h"
@@ -119,6 +120,7 @@ void update(int* cells, size_t width, size_t height, snake_t* snake_p,
             else {
                 *(int *)(snake_p->head->data) = next_pos;
             }
+            beep();
 
             place_food(cells, width, height);
         }
