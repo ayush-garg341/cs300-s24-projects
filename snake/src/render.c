@@ -102,7 +102,9 @@ void render_game(int* cells, size_t width, size_t height) {
                 ADD(i / width, i % width, c | COLOR_PAIR(COLOR_GRASS));
             }
             else {
-                ADD(i / width, i % width, c | COLOR_PAIR(COLOR_SNAKE));
+                cchar_t ch;
+                setcchar(&ch, L"\u25CF", WA_NORMAL, COLOR_SNAKE, NULL);
+                ADDW(i / width, i % width, &ch);
             }
         } else if (cells[i] & FLAG_FOOD) {
             char c = 'O';
