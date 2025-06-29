@@ -57,6 +57,24 @@ struct dmalloc_stats {
     uintptr_t heap_max;                 // largest allocated addr
 };
 
+struct memory_tracker{
+    unsigned long long nactive;         // # active allocations
+    unsigned long long active_size;     // # bytes in active allocations
+    unsigned long long ntotal;          // # total allocations
+    unsigned long long total_size;      // # bytes in total allocations
+    unsigned long long nfail;           // # failed allocation attempts
+    unsigned long long fail_size;       // # bytes in failed alloc attempts
+    uintptr_t heap_min;                 // smallest allocated addr
+    uintptr_t heap_max;                 // largest allocated addr
+};
+
+extern struct memory_tracker tracker;
+
+typedef struct{
+  size_t size;
+}metadata_tracker;
+
+
 /**
  * get_statistics(stats)
  *      fill a dmalloc_stats pointer with the current memory statistics

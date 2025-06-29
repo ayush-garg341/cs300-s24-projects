@@ -3,6 +3,8 @@
 #include <cassert>
 #include <cstring>
 
+struct memory_tracker tracker;
+
 /**
  * dmalloc(sz,file,line)
  *      malloc() wrapper. Dynamically allocate the requested amount `sz` of memory and 
@@ -16,8 +18,33 @@
  */
 void* dmalloc(size_t sz, const char* file, long line) {
     (void) file, (void) line;   // avoid uninitialized variable warnings
-    // Your code here.
-    return base_malloc(sz);
+
+    ;
+    size_t total_size = sizeof(metadata_tracker) + sz;
+    metadata_tracker* metadata = (metadata_tracker *)base_malloc(total_size);
+
+    if(!metadata)
+    {
+      tracker.nfail += 1;
+      tracker.fail_size += sz;
+      return NULL;
+    }
+
+    metadata->size = sz;
+    
+    tracker.ntotal += 1;
+    tracker.total_size += sz;
+    tracker.nactive += 1;
+    tracker.active_size += sz;
+    if( (uintptr_t)(metadata+1) < tracker.heap_min)
+    {
+      tracker.heap_min = (uintptr_t)(metadata+1);
+    }
+    if( (uintptr_t)(metadata+sz) > tracker.heap_max)
+    {
+      tracker.heap_max = (uintptr_t)(metadata+sz);
+    }
+    return (void *)(metadata + 1);
 }
 
 /**
@@ -31,8 +58,13 @@ void* dmalloc(size_t sz, const char* file, long line) {
  */
 void dfree(void* ptr, const char* file, long line) {
     (void) file, (void) line;   // avoid uninitialized variable warnings
-    // Your code here.
-    base_free(ptr);
+
+    if(!ptr)
+      return;
+    metadata_tracker* meta = ((metadata_tracker*)ptr) - 1;
+    tracker.nactive -= 1;
+    tracker.active_size -= meta->size;
+    base_free(meta);
 }
 
 /**
@@ -67,6 +99,15 @@ void get_statistics(dmalloc_stats* stats) {
     // Stub: set all statistics to enormous numbers
     memset(stats, 255, sizeof(dmalloc_stats));
     // Your code here.
+
+    stats->nactive = tracker.nactive;
+    stats->active_size = tracker.active_size;
+    stats->ntotal = tracker.ntotal;
+    stats->total_size = tracker.total_size;
+    stats->nfail = tracker.nfail;
+    stats->fail_size = tracker.fail_size;
+    stats->heap_min = tracker.heap_min;
+    stats->heap_max = tracker.heap_max;
 }
 
 /**
