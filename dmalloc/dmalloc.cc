@@ -20,8 +20,17 @@ void* dmalloc(size_t sz, const char* file, long line) {
     (void) file, (void) line;   // avoid uninitialized variable warnings
 
     ;
+
+    metadata_tracker *metadata;
     size_t total_size = sizeof(metadata_tracker) + sz;
-    metadata_tracker* metadata = (metadata_tracker *)base_malloc(total_size);
+
+    // Check for unsigned addition overflow ( INTEGER overflow )
+    if(total_size < sz)
+    {
+      metadata = NULL;
+    }else{
+      metadata = (metadata_tracker *)base_malloc(total_size);
+    }
 
     if(!metadata)
     {
@@ -85,7 +94,16 @@ void dfree(void* ptr, const char* file, long line) {
  * @return a pointer to the heap where the memory was reserved
  */
 void* dcalloc(size_t nmemb, size_t sz, const char* file, long line) {
-    // Your code here (to fix test014).
+
+    // Check for unsigned multiplication overflow. ( Integer overflow )
+    if(sz != 0 && nmemb > UINT64_MAX / sz)
+    {
+      // update the fail count and fail size
+      tracker.nfail += 1;
+      tracker.fail_size += nmemb * sz;
+      return NULL;
+    }
+
     void* ptr = dmalloc(nmemb * sz, file, line);
     if (ptr) {
         memset(ptr, 0, nmemb * sz);
