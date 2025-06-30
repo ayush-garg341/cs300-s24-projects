@@ -36,13 +36,16 @@ void* dmalloc(size_t sz, const char* file, long line) {
     tracker.total_size += sz;
     tracker.nactive += 1;
     tracker.active_size += sz;
-    if( (uintptr_t)(metadata+1) < tracker.heap_min)
+
+    uintptr_t heap_min = (uintptr_t) (metadata + 1);
+    uintptr_t heap_max = ((uintptr_t) (metadata + 1)) + sz;
+    if(!tracker.heap_min || heap_min <= tracker.heap_min)
     {
-      tracker.heap_min = (uintptr_t)(metadata+1);
+      tracker.heap_min = heap_min;
     }
-    if( (uintptr_t)(metadata+sz) > tracker.heap_max)
+    if(!tracker.heap_max || heap_max >= tracker.heap_max)
     {
-      tracker.heap_max = (uintptr_t)(metadata+sz);
+      tracker.heap_max = heap_max;
     }
     return (void *)(metadata + 1);
 }
@@ -61,6 +64,7 @@ void dfree(void* ptr, const char* file, long line) {
 
     if(!ptr)
       return;
+
     metadata_tracker* meta = ((metadata_tracker*)ptr) - 1;
     tracker.nactive -= 1;
     tracker.active_size -= meta->size;
