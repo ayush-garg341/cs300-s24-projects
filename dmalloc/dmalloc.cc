@@ -99,6 +99,7 @@ void dfree(void* ptr, const char* file, long line) {
     // Check if re-allocated on heap, the same memory
     node_t* allocated_list = tracker.active_allocations_head;
     node_t* allocated_head = allocated_list;
+    node_t* prev_allocated_head = NULL;
     while(allocated_head != NULL)
     {
       if(allocated_head->data == ptr)
@@ -109,6 +110,7 @@ void dfree(void* ptr, const char* file, long line) {
       if(uintptr_t(ptr) <= uintptr_t(allocated_head->data) + allocated_head->size && uintptr_t(ptr) >= uintptr_t(allocated_head->data))
         in_heap_range = true;
 
+      prev_allocated_head = allocated_head;
       allocated_head = allocated_head->next;
     }
 
@@ -144,11 +146,7 @@ void dfree(void* ptr, const char* file, long line) {
     }
 
     // Remove from allocated list and assign to freed list
-    allocated_list = tracker.active_allocations_head;
-    allocated_head = allocated_list;
-    node_t* prev_allocated_head = NULL;
-    while(allocated_head != NULL)
-    {
+    if(allocated){
       if(allocated_head->data == ptr)
       {
         // Found on allocated list.
@@ -171,11 +169,7 @@ void dfree(void* ptr, const char* file, long line) {
           allocated_head->next = tracker.freed_allocations_head;
           tracker.freed_allocations_head = allocated_head;
         }
-
-        break;
       }
-      prev_allocated_head = allocated_head;
-      allocated_head = allocated_head->next;
     }
 
     // Now freeing the pointer.
