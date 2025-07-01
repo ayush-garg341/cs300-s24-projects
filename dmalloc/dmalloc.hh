@@ -45,6 +45,12 @@ void dfree(void* ptr, const char* file, long line);
  */
 void* dcalloc(size_t nmemb, size_t sz, const char* file, long line);
 
+typedef struct node {
+    void* data;
+    size_t size;
+    struct node* next;
+} node_t;
+
 // struct to store global information about the dalloc functions
 struct dmalloc_stats {
     unsigned long long nactive;         // # active allocations
@@ -66,6 +72,8 @@ struct memory_tracker{
     unsigned long long fail_size;       // # bytes in failed alloc attempts
     uintptr_t heap_min;                 // smallest allocated addr
     uintptr_t heap_max;                 // largest allocated addr
+    node_t* active_allocations_head;    // List of active allocation.
+    node_t* freed_allocations_head;     // List of freed allocation
 };
 
 extern struct memory_tracker tracker;

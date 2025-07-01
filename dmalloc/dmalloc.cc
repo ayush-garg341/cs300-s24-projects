@@ -1,3 +1,4 @@
+#include <sys/wait.h>
 #define DMALLOC_DISABLE 1
 #include "dmalloc.hh"
 #include <cassert>
@@ -56,6 +57,25 @@ void* dmalloc(size_t sz, const char* file, long line) {
     {
       tracker.heap_max = heap_max;
     }
+
+    if(tracker.active_allocations_head == NULL)
+    {
+      // Create a head node
+      node_t* head = (node_t*)malloc(sizeof(node_t));
+      head->next = NULL;
+      head->data = (void *)(metadata+1);
+      head->size = sz;
+      tracker.active_allocations_head = head;
+    }
+    else{
+      // Add a node at the beginning of the list
+      node_t* head = (node_t*)malloc(sizeof(node_t));
+      head->data = (void *)(metadata+1);
+      head->next = tracker.active_allocations_head;
+      head->size = sz;
+      tracker.active_allocations_head = head;
+    }
+
     return (void *)(metadata + 1);
 }
 
@@ -73,6 +93,92 @@ void dfree(void* ptr, const char* file, long line) {
 
     if(!ptr)
       return;
+
+    bool allocated = false;
+    bool in_heap_range = false;
+    // Check if re-allocated on heap, the same memory
+    node_t* allocated_list = tracker.active_allocations_head;
+    node_t* allocated_head = allocated_list;
+    while(allocated_head != NULL)
+    {
+      if(allocated_head->data == ptr)
+      {
+        allocated = true;
+        break;
+      }
+      if(uintptr_t(ptr) <= uintptr_t(allocated_head->data) + allocated_head->size && uintptr_t(ptr) >= uintptr_t(allocated_head->data))
+        in_heap_range = true;
+
+      allocated_head = allocated_head->next;
+    }
+
+
+    // Check if already freed
+    node_t* freed_list = tracker.freed_allocations_head;
+    node_t* freed_head = freed_list;
+    while(freed_head != NULL)
+    {
+      if(freed_head->data == ptr && !allocated)
+      {
+        // Already freed
+        fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, double free\n", file, line, ptr);
+        return;
+      }
+      freed_head = freed_head->next;
+    }
+
+    // Check if not allocated (base pointer) but exist in heap ( allocated range )
+    if(!allocated && in_heap_range)
+    {
+      // valid heap memory but not allocated, exit.
+      fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not allocated\n", file, line, ptr);
+      return;
+    }
+
+    // This pointer is neither base pointer nor inside allocated heap range
+    if(!allocated)
+    {
+      // Not inside allocated memory on heap, exit.
+      fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not in heap\n", file, line, ptr);
+      return;
+    }
+
+    // Remove from allocated list and assign to freed list
+    allocated_list = tracker.active_allocations_head;
+    allocated_head = allocated_list;
+    node_t* prev_allocated_head = NULL;
+    while(allocated_head != NULL)
+    {
+      if(allocated_head->data == ptr)
+      {
+        // Found on allocated list.
+        if(prev_allocated_head != NULL)
+          // Change prev allocated head, if it's not null
+          prev_allocated_head->next = allocated_head->next;
+        else 
+          // Change the active allocations head
+          tracker.active_allocations_head = allocated_head->next;
+
+        // Add to freed list
+        if(tracker.freed_allocations_head == NULL)
+        {
+          // Create a node at the head.
+          allocated_head->next = NULL;
+          tracker.freed_allocations_head = allocated_head;
+        }
+        else {
+          // Add a node at the head.
+          allocated_head->next = tracker.freed_allocations_head;
+          tracker.freed_allocations_head = allocated_head;
+        }
+
+        break;
+      }
+      prev_allocated_head = allocated_head;
+      allocated_head = allocated_head->next;
+    }
+
+    // Now freeing the pointer.
 
     metadata_tracker* meta = ((metadata_tracker*)ptr) - 1;
     tracker.nactive -= 1;
