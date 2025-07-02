@@ -22,15 +22,15 @@ void* dmalloc(size_t sz, const char* file, long line) {
 
     ;
 
-    void* allocation;
-    size_t total_size = sz;
+    char* allocation;
+    size_t total_size = sz + 2; // 2 for magic bytes
 
     // Check for unsigned addition overflow ( INTEGER overflow )
     if(total_size < sz)
     {
       allocation = NULL;
     }else{
-      allocation = base_malloc(total_size);
+      allocation = (char *)base_malloc(total_size);
     }
 
     if(!allocation)
@@ -45,8 +45,11 @@ void* dmalloc(size_t sz, const char* file, long line) {
     tracker.nactive += 1;
     tracker.active_size += sz;
 
+    allocation[sz] = MAGIC_3; // don't do sz+1 and sz+2 here as indexing starts from 0 to sz-1 ( total sz elements )
+    allocation[sz+1] = MAGIC_4;
+
     uintptr_t heap_min = (uintptr_t)allocation;
-    uintptr_t heap_max = (uintptr_t)allocation + sz;
+    uintptr_t heap_max = (uintptr_t)(allocation) + sz;
     if(!tracker.heap_min || heap_min <= tracker.heap_min)
     {
       tracker.heap_min = heap_min;
@@ -61,20 +64,20 @@ void* dmalloc(size_t sz, const char* file, long line) {
       // Create a head node
       node_t* head = (node_t*)malloc(sizeof(node_t));
       head->next = NULL;
-      head->data = allocation;
+      head->data = (void *)allocation;
       head->size = sz;
       tracker.active_allocations_head = head;
     }
     else{
       // Add a node at the beginning of the list
       node_t* head = (node_t*)malloc(sizeof(node_t));
-      head->data = allocation;
+      head->data = (void *)allocation;
       head->next = tracker.active_allocations_head;
       head->size = sz;
       tracker.active_allocations_head = head;
     }
 
-    return allocation;
+    return (void*)allocation;
 }
 
 /**
@@ -143,6 +146,7 @@ void dfree(void* ptr, const char* file, long line) {
       return;
     }
 
+
     // Remove from allocated list and assign to freed list
     size_t sz = allocated_head->size;
     if(allocated){
@@ -171,11 +175,20 @@ void dfree(void* ptr, const char* file, long line) {
       }
     }
 
+
+    // Check for corrupted memory around boundary conditions.
+    char* base_ptr = (char *)ptr;
+    if((int)base_ptr[sz] != MAGIC_3 || (int)base_ptr[sz+1] != MAGIC_4)
+    {
+      fprintf(stderr, "MEMORY BUG: %s:%ld: detected wild write during free of pointer %p\n", file, line, ptr);
+      abort();
+    }
+
     // Now freeing the pointer.
 
     tracker.nactive -= 1;
     tracker.active_size -= sz;
-    base_free(ptr);
+    base_free((void *)base_ptr);
 }
 
 /**

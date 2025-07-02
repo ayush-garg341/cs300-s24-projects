@@ -7,6 +7,14 @@
 #include <new>
 
 /**
+  * Defining magic bytes at the boundary of allocated block
+  */
+#define MAGIC_1 0xDE // Starting 1st byte
+#define MAGIC_2 0xAD // Starting 2nd byte
+#define MAGIC_3 0xBE // Second Last byte
+#define MAGIC_4 0xEF // Last byte
+
+/**
  * dmalloc(sz,file,line)
  *      malloc() wrapper. Dynamically allocate the requested amount `sz` of memory and
  *      return a pointer to it
