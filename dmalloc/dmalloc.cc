@@ -22,33 +22,31 @@ void* dmalloc(size_t sz, const char* file, long line) {
 
     ;
 
-    metadata_tracker *metadata;
-    size_t total_size = sizeof(metadata_tracker) + sz;
+    void* allocation;
+    size_t total_size = sz;
 
     // Check for unsigned addition overflow ( INTEGER overflow )
     if(total_size < sz)
     {
-      metadata = NULL;
+      allocation = NULL;
     }else{
-      metadata = (metadata_tracker *)base_malloc(total_size);
+      allocation = base_malloc(total_size);
     }
 
-    if(!metadata)
+    if(!allocation)
     {
       tracker.nfail += 1;
       tracker.fail_size += sz;
       return NULL;
     }
-
-    metadata->size = sz;
     
     tracker.ntotal += 1;
     tracker.total_size += sz;
     tracker.nactive += 1;
     tracker.active_size += sz;
 
-    uintptr_t heap_min = (uintptr_t) (metadata + 1);
-    uintptr_t heap_max = ((uintptr_t) (metadata + 1)) + sz;
+    uintptr_t heap_min = (uintptr_t)allocation;
+    uintptr_t heap_max = (uintptr_t)allocation + sz;
     if(!tracker.heap_min || heap_min <= tracker.heap_min)
     {
       tracker.heap_min = heap_min;
@@ -63,20 +61,20 @@ void* dmalloc(size_t sz, const char* file, long line) {
       // Create a head node
       node_t* head = (node_t*)malloc(sizeof(node_t));
       head->next = NULL;
-      head->data = (void *)(metadata+1);
+      head->data = allocation;
       head->size = sz;
       tracker.active_allocations_head = head;
     }
     else{
       // Add a node at the beginning of the list
       node_t* head = (node_t*)malloc(sizeof(node_t));
-      head->data = (void *)(metadata+1);
+      head->data = allocation;
       head->next = tracker.active_allocations_head;
       head->size = sz;
       tracker.active_allocations_head = head;
     }
 
-    return (void *)(metadata + 1);
+    return allocation;
 }
 
 /**
@@ -146,6 +144,7 @@ void dfree(void* ptr, const char* file, long line) {
     }
 
     // Remove from allocated list and assign to freed list
+    size_t sz = allocated_head->size;
     if(allocated){
       if(allocated_head->data == ptr)
       {
@@ -174,10 +173,9 @@ void dfree(void* ptr, const char* file, long line) {
 
     // Now freeing the pointer.
 
-    metadata_tracker* meta = ((metadata_tracker*)ptr) - 1;
     tracker.nactive -= 1;
-    tracker.active_size -= meta->size;
-    base_free(meta);
+    tracker.active_size -= sz;
+    base_free(ptr);
 }
 
 /**

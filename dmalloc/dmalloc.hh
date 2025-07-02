@@ -78,11 +78,6 @@ struct memory_tracker{
 
 extern struct memory_tracker tracker;
 
-typedef struct{
-  size_t size;
-}metadata_tracker;
-
-
 /**
  * get_statistics(stats)
  *      fill a dmalloc_stats pointer with the current memory statistics
