@@ -102,6 +102,7 @@ void dfree(void* ptr, const char* file, long line) {
     node_t* allocated_list = tracker.active_allocations_head;
     node_t* allocated_head = allocated_list;
     node_t* prev_allocated_head = NULL;
+    node_t* heap_range_allocated = NULL;
     while(allocated_head != NULL)
     {
       if(allocated_head->data == ptr)
@@ -109,8 +110,10 @@ void dfree(void* ptr, const char* file, long line) {
         allocated = true;
         break;
       }
-      if(uintptr_t(ptr) <= uintptr_t(allocated_head->data) + allocated_head->size && uintptr_t(ptr) >= uintptr_t(allocated_head->data))
+      if(uintptr_t(ptr) <= uintptr_t(allocated_head->data) + allocated_head->size && uintptr_t(ptr) >= uintptr_t(allocated_head->data)){
+        heap_range_allocated = allocated_head;
         in_heap_range = true;
+      }
 
       prev_allocated_head = allocated_head;
       allocated_head = allocated_head->next;
@@ -136,6 +139,10 @@ void dfree(void* ptr, const char* file, long line) {
     {
       // valid heap memory but not allocated, exit.
       fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not allocated\n", file, line, ptr);
+
+      size_t diff = (size_t)((char *)ptr - (char *)heap_range_allocated->data);
+      fprintf(stderr, "%s:%ld: %p is %zu bytes inside a %zu byte region allocated here\n", heap_range_allocated->filename, heap_range_allocated->line, ptr, diff, heap_range_allocated->size);
+
       return;
     }
 
