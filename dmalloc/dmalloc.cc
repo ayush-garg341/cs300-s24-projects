@@ -18,9 +18,6 @@ struct memory_tracker tracker;
  * @return a pointer to the heap where the memory was reserved
  */
 void* dmalloc(size_t sz, const char* file, long line) {
-    (void) file, (void) line;   // avoid uninitialized variable warnings
-
-    ;
 
     char* allocation;
     size_t total_size = sz + 2; // 2 for magic bytes
@@ -66,6 +63,8 @@ void* dmalloc(size_t sz, const char* file, long line) {
       head->next = NULL;
       head->data = (void *)allocation;
       head->size = sz;
+      head->filename = file;
+      head->line = line;
       tracker.active_allocations_head = head;
     }
     else{
@@ -74,6 +73,8 @@ void* dmalloc(size_t sz, const char* file, long line) {
       head->data = (void *)allocation;
       head->next = tracker.active_allocations_head;
       head->size = sz;
+      head->filename = file;
+      head->line = line;
       tracker.active_allocations_head = head;
     }
 
@@ -263,5 +264,10 @@ void print_statistics() {
  *      memory.
  */
 void print_leak_report() {
-    // Your code here.
+    node_t* allocated_head = tracker.active_allocations_head;
+    while(allocated_head!=NULL)
+    {
+      fprintf(stdout, "LEAK CHECK: %s:%ld: allocated object %p with size %zu\n", allocated_head->filename, allocated_head->line, allocated_head->data, allocated_head->size);
+      allocated_head = allocated_head->next;
+    }
 }

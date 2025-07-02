@@ -53,10 +53,12 @@ void dfree(void* ptr, const char* file, long line);
  */
 void* dcalloc(size_t nmemb, size_t sz, const char* file, long line);
 
-typedef struct node {
+typedef struct meta_node{
     void* data;
     size_t size;
-    struct node* next;
+    const char* filename;
+    long line;
+    struct meta_node* next;
 } node_t;
 
 // struct to store global information about the dalloc functions
