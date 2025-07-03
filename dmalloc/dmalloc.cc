@@ -4,11 +4,12 @@
 #include <cassert>
 #include <cstring>
 #include <map>
+#include <unordered_map>
 
 std::map<void*, meta_node> alloc_map;
 
 // Creating another map to avoid the test 33 failing due to memcpy and getting the old freed flag again and again
-std::map<void*, meta_node> free_map;
+std::unordered_map<void*, void*> free_map;
 
 struct memory_tracker tracker;
 
@@ -156,7 +157,7 @@ void dfree(void* ptr, const char* file, long line) {
     }
     
     // Add to free map
-    free_map[ptr] = alloc_map[ptr];
+    free_map[ptr] = NULL;
 
     // Erase from alloc map
     alloc_map.erase(ptr);
