@@ -3,8 +3,12 @@
 #include "dmalloc.hh"
 #include <cassert>
 #include <cstring>
+#include <map>
+
+std::map<void*, void*> alloc_map;
 
 struct memory_tracker tracker;
+
 
 /**
  * dmalloc(sz,file,line)
@@ -56,30 +60,19 @@ void* dmalloc(size_t sz, const char* file, long line) {
       tracker.heap_max = heap_max;
     }
 
-    if(tracker.active_allocations_head == NULL)
-    {
-      // Create a head node
-      node_t* head = (node_t*)malloc(sizeof(node_t));
-      head->next = NULL;
-      head->data = (void *)allocation;
-      head->size = sz;
-      head->filename = file;
-      head->line = line;
-      tracker.active_allocations_head = head;
-    }
-    else{
-      // Add a node at the beginning of the list
-      node_t* head = (node_t*)malloc(sizeof(node_t));
-      head->data = (void *)allocation;
-      head->next = tracker.active_allocations_head;
-      head->size = sz;
-      head->filename = file;
-      head->line = line;
-      tracker.active_allocations_head = head;
-    }
+    // Create a node storing all the info about allocation
+    node_t* meta_node = (node_t*)malloc(sizeof(node_t));
+    meta_node->data = (void *)allocation;
+    meta_node->size = sz;
+    meta_node->filename = file;
+    meta_node->line = line;
+    meta_node->freed = false;
+
+    alloc_map[(void *)allocation] = (void *)meta_node;
 
     return (void*)allocation;
 }
+
 
 /**
  * dfree(ptr, file, line)
@@ -98,40 +91,41 @@ void dfree(void* ptr, const char* file, long line) {
 
     bool allocated = false;
     bool in_heap_range = false;
-    // Check if re-allocated on heap, the same memory
-    node_t* allocated_list = tracker.active_allocations_head;
-    node_t* allocated_head = allocated_list;
-    node_t* prev_allocated_head = NULL;
-    node_t* heap_range_allocated = NULL;
-    while(allocated_head != NULL)
-    {
-      if(allocated_head->data == ptr)
-      {
-        allocated = true;
-        break;
-      }
-      if(uintptr_t(ptr) <= uintptr_t(allocated_head->data) + allocated_head->size && uintptr_t(ptr) >= uintptr_t(allocated_head->data)){
-        heap_range_allocated = allocated_head;
-        in_heap_range = true;
-      }
+    node_t* heap_allocated = NULL;
+    void* base_ptr = NULL;
 
-      prev_allocated_head = allocated_head;
-      allocated_head = allocated_head->next;
+    // First: check for exact match
+    auto exact = alloc_map.find(ptr);
+    if (exact != alloc_map.end()) {
+      allocated = true;
+      heap_allocated = (node_t*)exact->second;
     }
 
+    // Then: check for "inside any allocated range"
+    if(!allocated)
+    {
+      auto it = alloc_map.upper_bound(ptr);
+      if (it == alloc_map.begin()) {
+        in_heap_range = false;
+      }
+      else{
+        --it;
+        base_ptr = it->first;
+        node_t* meta_node = (node_t*)it->second;
+        if(uintptr_t(ptr) <= uintptr_t(base_ptr) + meta_node->size && uintptr_t(ptr) >= uintptr_t(base_ptr)){
+          heap_allocated = meta_node;
+          in_heap_range = true;
+        }
+
+      }
+    }
 
     // Check if already freed
-    node_t* freed_list = tracker.freed_allocations_head;
-    node_t* freed_head = freed_list;
-    while(freed_head != NULL)
+    if(allocated && heap_allocated == NULL)
     {
-      if(freed_head->data == ptr && !allocated)
-      {
-        // Already freed
-        fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, double free\n", file, line, ptr);
-        return;
-      }
-      freed_head = freed_head->next;
+      // Already freed
+      fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, double free\n", file, line, ptr);
+      return;
     }
 
     // Check if not allocated (base pointer) but exist in heap ( allocated range )
@@ -140,8 +134,8 @@ void dfree(void* ptr, const char* file, long line) {
       // valid heap memory but not allocated, exit.
       fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not allocated\n", file, line, ptr);
 
-      size_t diff = (size_t)((char *)ptr - (char *)heap_range_allocated->data);
-      fprintf(stderr, "%s:%ld: %p is %zu bytes inside a %zu byte region allocated here\n", heap_range_allocated->filename, heap_range_allocated->line, ptr, diff, heap_range_allocated->size);
+      size_t diff = (size_t)((char *)ptr - (char *)base_ptr);
+      fprintf(stderr, "%s:%ld: %p is %zu bytes inside a %zu byte region allocated here\n", heap_allocated->filename, heap_allocated->line, ptr, diff, heap_allocated->size);
 
       return;
     }
@@ -156,47 +150,26 @@ void dfree(void* ptr, const char* file, long line) {
 
 
     // Remove from allocated list and assign to freed list
-    size_t sz = allocated_head->size;
-    if(allocated){
-      if(allocated_head->data == ptr)
-      {
-        // Found on allocated list.
-        if(prev_allocated_head != NULL)
-          // Change prev allocated head, if it's not null
-          prev_allocated_head->next = allocated_head->next;
-        else 
-          // Change the active allocations head
-          tracker.active_allocations_head = allocated_head->next;
-
-        // Add to freed list
-        if(tracker.freed_allocations_head == NULL)
-        {
-          // Create a node at the head.
-          allocated_head->next = NULL;
-          tracker.freed_allocations_head = allocated_head;
-        }
-        else {
-          // Add a node at the head.
-          allocated_head->next = tracker.freed_allocations_head;
-          tracker.freed_allocations_head = allocated_head;
-        }
-      }
-    }
-
+    size_t sz = heap_allocated->size;
 
     // Check for corrupted memory around boundary conditions.
-    char* base_ptr = (char *)ptr;
-    if((int)base_ptr[sz] != MAGIC_3 || (int)base_ptr[sz+1] != MAGIC_4)
+    char* int_base_ptr = (char *)ptr;
+    if((int)int_base_ptr[sz] != MAGIC_3 || (int)int_base_ptr[sz+1] != MAGIC_4)
     {
       fprintf(stderr, "MEMORY BUG: %s:%ld: detected wild write during free of pointer %p\n", file, line, ptr);
       abort();
     }
+    
+    // heap_allocated->freed = true;
+    // Do not erase entry from map, otherwise how to check if double free
+    // alloc_map.erase((void*)int_base_ptr);
+    alloc_map[(void*)int_base_ptr] = NULL;
 
     // Now freeing the pointer.
 
     tracker.nactive -= 1;
     tracker.active_size -= sz;
-    base_free((void *)base_ptr);
+    base_free((void *)int_base_ptr);
 }
 
 /**
@@ -271,10 +244,14 @@ void print_statistics() {
  *      memory.
  */
 void print_leak_report() {
-    node_t* allocated_head = tracker.active_allocations_head;
-    while(allocated_head!=NULL)
+
+    for (auto it = alloc_map.begin(); it != alloc_map.end(); ++it) 
     {
-      fprintf(stdout, "LEAK CHECK: %s:%ld: allocated object %p with size %zu\n", allocated_head->filename, allocated_head->line, allocated_head->data, allocated_head->size);
-      allocated_head = allocated_head->next;
+      void* base_ptr = it->first;
+      node_t* meta_node = (node_t*)it->second;
+      if(meta_node != NULL)
+      {
+        fprintf(stdout, "LEAK CHECK: %s:%ld: allocated object %p with size %zu\n", meta_node->filename, meta_node->line, base_ptr, meta_node->size);
+      }
     }
 }

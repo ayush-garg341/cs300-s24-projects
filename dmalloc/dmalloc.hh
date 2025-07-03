@@ -58,7 +58,7 @@ typedef struct meta_node{
     size_t size;
     const char* filename;
     long line;
-    struct meta_node* next;
+    bool freed;
 } node_t;
 
 // struct to store global information about the dalloc functions
@@ -82,8 +82,6 @@ struct memory_tracker{
     unsigned long long fail_size;       // # bytes in failed alloc attempts
     uintptr_t heap_min;                 // smallest allocated addr
     uintptr_t heap_max;                 // largest allocated addr
-    node_t* active_allocations_head;    // List of active allocation.
-    node_t* freed_allocations_head;     // List of freed allocation
 };
 
 extern struct memory_tracker tracker;
