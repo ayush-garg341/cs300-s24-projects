@@ -5,7 +5,10 @@
 #include <cstring>
 #include <map>
 
-std::map<void*, void*> alloc_map;
+std::map<void*, meta_node> alloc_map;
+
+// Creating another map to avoid the test 33 failing due to memcpy and getting the old freed flag again and again
+std::map<void*, meta_node> free_map;
 
 struct memory_tracker tracker;
 
@@ -60,15 +63,7 @@ void* dmalloc(size_t sz, const char* file, long line) {
       tracker.heap_max = heap_max;
     }
 
-    // Create a node storing all the info about allocation
-    node_t* meta_node = (node_t*)malloc(sizeof(node_t));
-    meta_node->data = (void *)allocation;
-    meta_node->size = sz;
-    meta_node->filename = file;
-    meta_node->line = line;
-    meta_node->freed = false;
-
-    alloc_map[(void *)allocation] = (void *)meta_node;
+    alloc_map[(void *)allocation] = meta_node{sz, file, line};
 
     return (void*)allocation;
 }
@@ -91,14 +86,14 @@ void dfree(void* ptr, const char* file, long line) {
 
     bool allocated = false;
     bool in_heap_range = false;
-    node_t* heap_allocated = NULL;
+    meta_node heap_allocated;
     void* base_ptr = NULL;
 
     // First: check for exact match
     auto exact = alloc_map.find(ptr);
     if (exact != alloc_map.end()) {
       allocated = true;
-      heap_allocated = (node_t*)exact->second;
+      heap_allocated = exact->second;
     }
 
     // Then: check for "inside any allocated range"
@@ -111,17 +106,17 @@ void dfree(void* ptr, const char* file, long line) {
       else{
         --it;
         base_ptr = it->first;
-        node_t* meta_node = (node_t*)it->second;
-        if(uintptr_t(ptr) <= uintptr_t(base_ptr) + meta_node->size && uintptr_t(ptr) >= uintptr_t(base_ptr)){
-          heap_allocated = meta_node;
+        meta_node node = it->second;
+        if(uintptr_t(ptr) <= uintptr_t(base_ptr) + node.size && uintptr_t(ptr) >= uintptr_t(base_ptr)){
           in_heap_range = true;
+          heap_allocated = node;
         }
 
       }
     }
 
     // Check if already freed
-    if(allocated && heap_allocated == NULL)
+    if(!allocated && free_map.find(ptr) != free_map.end())
     {
       // Already freed
       fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, double free\n", file, line, ptr);
@@ -135,7 +130,7 @@ void dfree(void* ptr, const char* file, long line) {
       fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not allocated\n", file, line, ptr);
 
       size_t diff = (size_t)((char *)ptr - (char *)base_ptr);
-      fprintf(stderr, "%s:%ld: %p is %zu bytes inside a %zu byte region allocated here\n", heap_allocated->filename, heap_allocated->line, ptr, diff, heap_allocated->size);
+      fprintf(stderr, "%s:%ld: %p is %zu bytes inside a %zu byte region allocated here\n", heap_allocated.filename, heap_allocated.line, ptr, diff, heap_allocated.size);
 
       return;
     }
@@ -150,7 +145,7 @@ void dfree(void* ptr, const char* file, long line) {
 
 
     // Remove from allocated list and assign to freed list
-    size_t sz = heap_allocated->size;
+    size_t sz = heap_allocated.size;
 
     // Check for corrupted memory around boundary conditions.
     char* int_base_ptr = (char *)ptr;
@@ -160,16 +155,16 @@ void dfree(void* ptr, const char* file, long line) {
       abort();
     }
     
-    // heap_allocated->freed = true;
-    // Do not erase entry from map, otherwise how to check if double free
-    // alloc_map.erase((void*)int_base_ptr);
-    alloc_map[(void*)int_base_ptr] = NULL;
+    // Add to free map
+    free_map[ptr] = alloc_map[ptr];
+
+    // Erase from alloc map
+    alloc_map.erase(ptr);
 
     // Now freeing the pointer.
-
     tracker.nactive -= 1;
     tracker.active_size -= sz;
-    base_free((void *)int_base_ptr);
+    base_free(ptr);
 }
 
 /**
@@ -248,10 +243,7 @@ void print_leak_report() {
     for (auto it = alloc_map.begin(); it != alloc_map.end(); ++it) 
     {
       void* base_ptr = it->first;
-      node_t* meta_node = (node_t*)it->second;
-      if(meta_node != NULL)
-      {
-        fprintf(stdout, "LEAK CHECK: %s:%ld: allocated object %p with size %zu\n", meta_node->filename, meta_node->line, base_ptr, meta_node->size);
-      }
+      meta_node node = it->second;
+      fprintf(stdout, "LEAK CHECK: %s:%ld: allocated object %p with size %zu\n", node.filename, node.line, base_ptr, node.size);
     }
 }

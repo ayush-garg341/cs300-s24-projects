@@ -53,13 +53,12 @@ void dfree(void* ptr, const char* file, long line);
  */
 void* dcalloc(size_t nmemb, size_t sz, const char* file, long line);
 
-typedef struct meta_node{
-    void* data;
+struct meta_node{
     size_t size;
     const char* filename;
     long line;
-    bool freed;
-} node_t;
+};
+
 
 // struct to store global information about the dalloc functions
 struct dmalloc_stats {
