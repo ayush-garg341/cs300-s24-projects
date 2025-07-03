@@ -6,9 +6,12 @@
 #include <map>
 #include <unordered_map>
 
+// Using ordeered map, as we might have to search in the range, not exact key match.
+// Complexity O(log(n))
 std::map<void*, meta_node> alloc_map;
 
 // Creating another map to avoid the test 33 failing due to memcpy and getting the old freed flag again and again
+// Checking the key by exact match and hence unordered will be suitable.
 std::unordered_map<void*, void*> free_map;
 
 struct memory_tracker tracker;
