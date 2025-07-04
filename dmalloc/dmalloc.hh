@@ -53,6 +53,17 @@ void dfree(void* ptr, const char* file, long line);
  */
 void* dcalloc(size_t nmemb, size_t sz, const char* file, long line);
 
+/**
+  * drealloc(ptr, sz, file, line)
+   * @arg void* ptr: pointer to existing memory block on heap
+   * @arg size_t sz : the amount of memory requested
+   * @arg const char *file : a string containing the filename from which dmalloc was called
+   * @arg long line : the line number from which dmalloc was called
+   *
+   * @return a pointer to the heap where the new memory was allocated
+  */
+void* drealloc(void* ptr, size_t sz, const char* file, long line);
+
 struct meta_node{
     size_t size;
     const char* filename;

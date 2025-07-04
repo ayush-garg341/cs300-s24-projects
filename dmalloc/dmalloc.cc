@@ -72,6 +72,57 @@ void* dmalloc(size_t sz, const char* file, long line) {
     return (void*)allocation;
 }
 
+/**
+  * drealloc(ptr, sz, file, line)
+   * @arg void* ptr: pointer to existing memory block on heap
+   * @arg size_t sz : the amount of memory requested
+   * @arg const char *file : a string containing the filename from which dmalloc was called
+   * @arg long line : the line number from which dmalloc was called
+   *
+   * @return a pointer to the heap where the new memory was allocated
+  */
+void* drealloc(void* ptr, size_t sz, const char* file, long line){
+
+  // If ptr is nullptr, behaves like `dmalloc(sz, file, line)`
+  if(ptr == nullptr)
+  {
+    void* new_ptr = dmalloc(sz, file, line);
+    return new_ptr;
+  }
+
+  // If sz is 0, behaves like `dfree(ptr, file, line)`
+  if(sz == 0)
+  {
+    dfree(ptr, file, line);
+    return NULL;
+  }
+
+  void* new_ptr = dmalloc(sz, file, line);
+  if(new_ptr != NULL)
+  {
+    size_t existing_block_size = 0;
+    auto exact = alloc_map.find(ptr);
+    if (exact != alloc_map.end()) {
+      // Copy the old bytes to new bytes
+      existing_block_size = exact->second.size;
+      memcpy(new_ptr, ptr, existing_block_size);
+    }
+    else {
+      // ptr is not allocated by malloc
+      fprintf(stderr, "MEMORY BUG: %s:%ld: invalid memory block pointed by ptr:%p\n", file, line, ptr);
+      return NULL;
+    }
+
+    // Free the old ptr i.e. ptr
+    dfree(ptr, file, line);
+
+    return new_ptr;
+  }
+
+  // realloc failed and hence not doing anything with original ptr
+  fprintf(stderr, "Realloc failed, no new memory is allocated but old ptr is still valid");
+  return NULL;
+}
 
 /**
  * dfree(ptr, file, line)
