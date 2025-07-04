@@ -68,6 +68,7 @@ struct meta_node{
     size_t size;
     const char* filename;
     long line;
+    void* caller;
 };
 
 

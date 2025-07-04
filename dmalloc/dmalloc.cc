@@ -5,6 +5,7 @@
 #include <cstring>
 #include <map>
 #include <unordered_map>
+#include <unistd.h>
 
 // Using ordeered map, as we might have to search in the range, not exact key match.
 // Complexity O(log(n))
@@ -28,7 +29,10 @@ struct memory_tracker tracker;
  * 
  * @return a pointer to the heap where the memory was reserved
  */
-void* dmalloc(size_t sz, const char* file, long line) {
+[[gnu::noinline]] void* dmalloc(size_t sz, const char* file, long line) {
+
+    // Return address of function which called dmalloc
+    void* caller = __builtin_return_address(0);
 
     char* allocation;
     size_t total_size = sz + 2; // 2 for magic bytes
@@ -67,7 +71,7 @@ void* dmalloc(size_t sz, const char* file, long line) {
       tracker.heap_max = heap_max;
     }
 
-    alloc_map[(void *)allocation] = meta_node{sz, file, line};
+    alloc_map[(void *)allocation] = meta_node{sz, file, line, caller};
 
     return (void*)allocation;
 }
@@ -124,6 +128,40 @@ void* drealloc(void* ptr, size_t sz, const char* file, long line){
   return NULL;
 }
 
+char* resolve_and_print(void* addr) {
+    char exe_path[1024];
+    ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+    if (len == -1) return NULL;
+    exe_path[len] = '\0';
+
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd), "addr2line -e %s -s %p", exe_path, addr);
+
+    FILE* fp = popen(cmd, "r");
+    if (fp == NULL) return NULL;
+
+    char buffer[2048];
+    char* result = NULL;
+    if (fgets(buffer, sizeof(buffer), fp)) {
+        char* p = strstr(buffer, " (discriminator ");
+        if (p) *p = '\0'; // cut the string there
+        size_t buf_len = strlen(buffer);
+        char* temp = (char *)malloc(buf_len + 1);  // +1 for null terminator
+        if (!temp) {
+            free(result);
+            pclose(fp);
+            return NULL;
+        }
+        // Copy the string
+        result = temp;
+        strcpy(result, buffer);
+    }
+
+    pclose(fp);
+    return result;
+
+}
+
 /**
  * dfree(ptr, file, line)
  *      free() wrapper. Release the block of heap memory pointed to by `ptr`. This should 
@@ -133,7 +171,7 @@ void* drealloc(void* ptr, size_t sz, const char* file, long line){
  * @arg const char *file : a string containing the filename from which dfree was called 
  * @arg long line : the line number from which dfree was called 
  */
-void dfree(void* ptr, const char* file, long line) {
+[[gnu::noinline]] void dfree(void* ptr, const char* file, long line) {
     (void) file, (void) line;   // avoid uninitialized variable warnings
 
     if(!ptr)
@@ -235,7 +273,7 @@ void dfree(void* ptr, const char* file, long line) {
  * 
  * @return a pointer to the heap where the memory was reserved
  */
-void* dcalloc(size_t nmemb, size_t sz, const char* file, long line) {
+[[gnu::noinline]] void* dcalloc(size_t nmemb, size_t sz, const char* file, long line) {
 
     // Check for unsigned multiplication overflow. ( Integer overflow )
     if(sz != 0 && nmemb > UINT64_MAX / sz)
@@ -300,5 +338,9 @@ void print_leak_report() {
       void* base_ptr = it->first;
       meta_node node = it->second;
       fprintf(stdout, "LEAK CHECK: %s:%ld: allocated object %p with size %zu\n", node.filename, node.line, base_ptr, node.size);
+
+      // char* file_line = resolve_and_print(node.caller);
+      // fprintf(stdout, "LEAK CHECK: %s: allocated object %p with size %zu\n", file_line, base_ptr, node.size);
+      // free(file_line);
     }
 }
