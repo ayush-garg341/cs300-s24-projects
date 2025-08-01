@@ -38,7 +38,7 @@ IMPL ?= student
 
 ifeq ($(IMPL), student)
 	STUDENT_FLAGS = -Dfread=DO_NOT_USE_STDIO_fread -Dfwrite=DO_NOT_USE_STDIO_fwrite -Dfputc=DO_NOT_USE_STDIO_fputc -Dfgetc=DO_NOT_USE_STDIO_fgetc
-	STUDENT_FLAGS = -Dfputs=DO_NOT_USE_STDIO_fputs -Dfgets=DO_NOT_USE_STDIO_fgets
+	STUDENT_FLAGS += -Dfputs=DO_NOT_USE_STDIO_fputs -Dfgets=DO_NOT_USE_STDIO_fgets
 endif
 
 all: $(TEST_PROGRAMS) impl.o

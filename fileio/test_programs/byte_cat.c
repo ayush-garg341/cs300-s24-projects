@@ -34,7 +34,7 @@ int main(int argc, char* argv[]) {
         if (ch == -1) {
             fprintf(stderr,
                     "error: should not get EOF because we know the size of the "
-                    "file.\n");
+                    "file. read characters --- %d\n", i);
             exit_status = 1;
             break;
         }
