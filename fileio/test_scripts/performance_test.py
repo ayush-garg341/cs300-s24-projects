@@ -184,5 +184,10 @@ runtests(
     {
         "byte_cat": byte_cat,
         #    'diabolical_byte_cat': diabolical_byte_cat,
+        "reverse_byte_cat": reverse_byte_cat,
+        "block_cat": block_cat,
+        "reverse_block_cat": reverse_block_cat,
+        "random_block_cat": random_block_cat,
+        "stride_cat": stride_cat,
     }
 )
