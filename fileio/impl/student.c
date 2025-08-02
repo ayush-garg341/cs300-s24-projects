@@ -54,6 +54,7 @@ struct io300_file {
     bool is_dirty;
     size_t cache_start_file_offset;
     size_t cache_dirty_chars;
+    bool write_mode;
 
 
     /* Used for debugging, keep track of which io300_file is which */
@@ -77,11 +78,9 @@ static void check_invariants(struct io300_file* f) {
     assert(f->fd >= 0);
 
     // TODO: Add more invariants
-    // assert(f->file_offset >= 0);
     assert(f->buff_pos <= CACHE_SIZE);
     assert(f->buff_end <= CACHE_SIZE);
     assert(f->cache_dirty_chars <= CACHE_SIZE);
-    // assert(f->cache_start_file_offset >= 0);
 }
 
 /*
@@ -142,6 +141,7 @@ struct io300_file* io300_open(const char* const path, char* description) {
     ret->cache_start_file_offset = 0;
     ret->cache_dirty_chars = 0;
     ret->is_dirty = false;
+    ret->write_mode = false;
 
     ret->stats.read_calls = 0;
     ret->stats.write_calls = 0;
@@ -167,8 +167,23 @@ int io300_close(struct io300_file* const f) {
     // Flush the cache if it's dirty
     if(f->is_dirty && f->cache_dirty_chars > 0)
     {
+        size_t start_dirty = f->buff_pos - f->cache_dirty_chars;
+
+        // Find seek position
+        off_t seek_pos = f->cache_start_file_offset + start_dirty;
+        if(f->file_offset != (size_t)seek_pos)
+        {
+            int res = io300_seek(f, seek_pos);
+            if(res == -1)
+            {
+                return -1;
+            }
+
+            f->file_offset = res;
+        }
+
         f->stats.write_calls += 1;
-        ssize_t bytes_written = write(f->fd, &f->cache[f->buff_pos - f->cache_dirty_chars], f->cache_dirty_chars);
+        ssize_t bytes_written = write(f->fd, &f->cache[start_dirty], f->cache_dirty_chars);
         if(bytes_written == -1)
         {
             return -1;
@@ -206,21 +221,40 @@ off_t io300_filesize(struct io300_file* const f) {
 
 int io300_readc(struct io300_file* const f) {
     check_invariants(f);
-    // TODO: Implement this
 
-    // If cache is dirty, flush it
-    if(f->is_dirty)
+    // If cache is dirty, flush it and reload the cache, so that appropriate value is read.
+    // Switching from writing to reading, flushing cache
+    if(f->is_dirty && f->write_mode == true)
     {
-        ssize_t bytes_written = write(f->fd, &f->cache[f->buff_pos - f->cache_dirty_chars], f->cache_dirty_chars);
+        // Finding the index where dirty characters begin from
+        size_t start_dirty = f->buff_pos - f->cache_dirty_chars;
+
+        // Find seek position
+        off_t seek_pos = f->cache_start_file_offset + start_dirty;
+        if(f->file_offset != (size_t)seek_pos)
+        {
+            int res = io300_seek(f, seek_pos);
+            if(res == -1)
+            {
+                return -1;
+            }
+
+            f->file_offset = res;
+        }
+
+        f->stats.write_calls += 1;
+        ssize_t bytes_written = write(f->fd, &f->cache[start_dirty], f->cache_dirty_chars);
         if(bytes_written == -1)
         {
             return -1;
         }
+        if(bytes_written > 0 && (size_t)bytes_written != f->cache_dirty_chars)
+        {
+            return -1;
+        }
         f->file_offset += f->cache_dirty_chars;
-        f->buff_pos = 0;
-        f->buff_end = 0;
         f->cache_dirty_chars = 0;
-        f->is_dirty = false;
+        f->write_mode = false;
     }
 
     // Identifying that cache is empty or full and need reloading with new data
@@ -239,31 +273,44 @@ int io300_readc(struct io300_file* const f) {
     }
 
     return (unsigned char)f->cache[f->buff_pos++];
-
-    // unsigned char c;
-    // if (read(f->fd, &c, 1) == 1) {
-    //     return c;
-    // } else {
-    //     return -1;
-    // }
 }
+
+
 int io300_writec(struct io300_file* f, int ch) {
     check_invariants(f);
-    // TODO: Implement this
+
     char const c = (char)ch;
 
-    if(!f->is_dirty && f->buff_pos == CACHE_SIZE)
+    // Switching from read to write
+    if(!f->is_dirty && f->buff_pos == CACHE_SIZE && f->write_mode == false)
     {
         f->buff_pos = 0;
     }
 
+
     if(f->is_dirty && f->buff_pos == CACHE_SIZE)
     {
         // Flush the cache in a file
-        // Increment the user maintained file offset by those dirty characters
+        // Increment the user maintained file offset by those dirty characters, it should be matching with internal file offset maintained by kernel.
+
+        // Finding the index where dirty characters begin from
+        size_t start_dirty = f->buff_pos - f->cache_dirty_chars;
+
+        // Find seek position
+        off_t seek_pos = f->cache_start_file_offset + start_dirty;
+        if(f->file_offset != (size_t)seek_pos)
+        {
+            int res = io300_seek(f, seek_pos);
+            if(res == -1)
+            {
+                return -1;
+            }
+
+            f->file_offset = res;
+        }
 
         f->stats.write_calls += 1;
-        ssize_t bytes_written = write(f->fd, &f->cache[f->buff_pos - f->cache_dirty_chars], f->cache_dirty_chars);
+        ssize_t bytes_written = write(f->fd, &f->cache[start_dirty], f->cache_dirty_chars);
         if(bytes_written == -1)
         {
             return -1;
@@ -275,17 +322,17 @@ int io300_writec(struct io300_file* f, int ch) {
         f->file_offset += f->cache_dirty_chars;
         f->buff_pos = 0;
         f->cache_dirty_chars = 0;
+        f->cache_start_file_offset = f->file_offset;
     }
 
     // Else going down the happy path
 
-    f->cache[f->buff_pos] = c;
-    f->buff_pos += 1;
+    f->cache[f->buff_pos++] = c;
     f->is_dirty = true;
     f->cache_dirty_chars += 1;
+    f->write_mode = true;
 
     return ch;
-    // return write(f->fd, &c, 1) == 1 ? ch : -1;
 }
 
 ssize_t io300_read(struct io300_file* const f, char* const buff,

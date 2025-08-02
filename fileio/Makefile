@@ -25,7 +25,7 @@ CFLAGS       += -ggdb3 -Wall -Wextra -Wshadow -Werror -std=gnu11 -fsigned-char $
 
 # These programs use your IO library. We will run them to make sure your code is
 # working correctly
-TEST_PROGRAMS := io300_test byte_cat diabolical_byte_cat reverse_byte_cat block_cat reverse_block_cat random_block_cat stride_cat rot13
+TEST_PROGRAMS := io300_test byte_cat byte_cat_random diabolical_byte_cat reverse_byte_cat block_cat reverse_block_cat random_block_cat stride_cat rot13
 
 # Which implementation of io300_file do we want to use with our test programs?
 # Options are student | naive | stdio

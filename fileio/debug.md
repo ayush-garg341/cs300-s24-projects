@@ -57,6 +57,32 @@ vim myfile.bin
     - Even the same bytes can represent wildly different things depending on the program.
 
 
+### Debug/trace system calls with strace ...
+
+```bash
+
+strace -c ./byte_cat /tmp/infile /tmp/outfile
+
+strace -e trace=read /tmp/infile /tmp/outfile
+
+```
+
+### Time the executable call using time ...
+
+```bash
+
+/usr/bin/time -v inp_file out_file -> for verbose output
+
+time ./byte_cat /tmp/infile /tmp/outfile
+
+real -> real wall clock time taken
+usr -> time taken in user space
+sys -> time taken in kernel space
+
+```
+
+### To time your entire executable and pinpoint which lines of code are slowest, you’ll want to use profiling tools that give you line-level breakdowns of CPU usage.
+
 
 ### Debugging the code with gdb and xxd, diff
 
