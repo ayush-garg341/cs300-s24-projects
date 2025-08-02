@@ -304,6 +304,7 @@ int io300_flush(struct io300_file* const f) {
     }
     f->file_offset += f->cache_dirty_chars;
     f->buff_pos = 0;
+    f->buff_end = 0;
     f->cache_dirty_chars = 0;
     f->cache_start_file_offset = f->file_offset;
     return 0;
