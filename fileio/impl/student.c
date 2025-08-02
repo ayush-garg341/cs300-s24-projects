@@ -165,36 +165,13 @@ int io300_close(struct io300_file* const f) {
 
     // TODO: Implement this
     // Flush the cache if it's dirty
-    if(f->is_dirty && f->cache_dirty_chars > 0)
+    if(f->is_dirty && f->write_mode == true)
     {
-        size_t start_dirty = f->buff_pos - f->cache_dirty_chars;
-
-        // Find seek position
-        off_t seek_pos = f->cache_start_file_offset + start_dirty;
-        if(f->file_offset != (size_t)seek_pos)
-        {
-            int res = io300_seek(f, seek_pos);
-            if(res == -1)
-            {
-                return -1;
-            }
-
-            f->file_offset = res;
-        }
-
-        f->stats.write_calls += 1;
-        ssize_t bytes_written = write(f->fd, &f->cache[start_dirty], f->cache_dirty_chars);
-        if(bytes_written == -1)
+        int flushed = io300_flush(f);
+        if(flushed == -1)
         {
             return -1;
         }
-        if(bytes_written > 0 && (size_t)bytes_written != f->cache_dirty_chars)
-        {
-            return -1;
-        }
-        f->file_offset += f->cache_dirty_chars;
-        f->buff_pos = 0;
-        f->cache_dirty_chars = 0;
     }
 
 #if (DEBUG_STATISTICS == 1)
@@ -226,50 +203,22 @@ int io300_readc(struct io300_file* const f) {
     // Switching from writing to reading, flushing cache
     if(f->is_dirty && f->write_mode == true)
     {
-        // Finding the index where dirty characters begin from
-        size_t start_dirty = f->buff_pos - f->cache_dirty_chars;
-
-        // Find seek position
-        off_t seek_pos = f->cache_start_file_offset + start_dirty;
-        if(f->file_offset != (size_t)seek_pos)
-        {
-            int res = io300_seek(f, seek_pos);
-            if(res == -1)
-            {
-                return -1;
-            }
-
-            f->file_offset = res;
-        }
-
-        f->stats.write_calls += 1;
-        ssize_t bytes_written = write(f->fd, &f->cache[start_dirty], f->cache_dirty_chars);
-        if(bytes_written == -1)
+        int flushed = io300_flush(f);
+        if(flushed == -1)
         {
             return -1;
         }
-        if(bytes_written > 0 && (size_t)bytes_written != f->cache_dirty_chars)
-        {
-            return -1;
-        }
-        f->file_offset += f->cache_dirty_chars;
-        f->cache_dirty_chars = 0;
         f->write_mode = false;
     }
 
     // Identifying that cache is empty or full and need reloading with new data
     if(f->buff_end == 0 || (f->buff_pos >= f->buff_end))
     {
-        f->stats.read_calls += 1;
-        ssize_t bytes_read = read(f->fd, f->cache, CACHE_SIZE);
-        if(bytes_read == -1 || bytes_read == 0)
+        int fetched = io300_fetch(f);
+        if(fetched == -1)
         {
             return -1;
         }
-        f->buff_pos = 0;
-        f->buff_end = bytes_read;
-        f->cache_start_file_offset = f->file_offset;
-        f->file_offset += bytes_read;
     }
 
     return (unsigned char)f->cache[f->buff_pos++];
@@ -288,41 +237,14 @@ int io300_writec(struct io300_file* f, int ch) {
     }
 
 
+    // If cache is full and dirty, flush it
     if(f->is_dirty && f->buff_pos == CACHE_SIZE)
     {
-        // Flush the cache in a file
-        // Increment the user maintained file offset by those dirty characters, it should be matching with internal file offset maintained by kernel.
-
-        // Finding the index where dirty characters begin from
-        size_t start_dirty = f->buff_pos - f->cache_dirty_chars;
-
-        // Find seek position
-        off_t seek_pos = f->cache_start_file_offset + start_dirty;
-        if(f->file_offset != (size_t)seek_pos)
-        {
-            int res = io300_seek(f, seek_pos);
-            if(res == -1)
-            {
-                return -1;
-            }
-
-            f->file_offset = res;
-        }
-
-        f->stats.write_calls += 1;
-        ssize_t bytes_written = write(f->fd, &f->cache[start_dirty], f->cache_dirty_chars);
-        if(bytes_written == -1)
+        int flushed = io300_flush(f);
+        if(flushed == -1)
         {
             return -1;
         }
-        if(bytes_written > 0 && (size_t)bytes_written != f->cache_dirty_chars)
-        {
-            return -1;
-        }
-        f->file_offset += f->cache_dirty_chars;
-        f->buff_pos = 0;
-        f->cache_dirty_chars = 0;
-        f->cache_start_file_offset = f->file_offset;
     }
 
     // Else going down the happy path
@@ -350,7 +272,40 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
 
 int io300_flush(struct io300_file* const f) {
     check_invariants(f);
-    // TODO: Implement this
+
+    // Flush the cache in a file
+    // Increment the user maintained file offset by those dirty characters, it should be matching with internal file offset maintained by kernel.
+
+    // Finding the index where dirty characters begin from
+    size_t start_dirty = f->buff_pos - f->cache_dirty_chars;
+
+    // Find seek position
+    off_t seek_pos = f->cache_start_file_offset + start_dirty;
+    if(f->file_offset != (size_t)seek_pos)
+    {
+        int res = io300_seek(f, seek_pos);
+        if(res == -1)
+        {
+            return -1;
+        }
+
+        f->file_offset = res;
+    }
+
+    f->stats.write_calls += 1;
+    ssize_t bytes_written = write(f->fd, &f->cache[start_dirty], f->cache_dirty_chars);
+    if(bytes_written == -1)
+    {
+        return -1;
+    }
+    if(bytes_written > 0 && (size_t)bytes_written != f->cache_dirty_chars)
+    {
+        return -1;
+    }
+    f->file_offset += f->cache_dirty_chars;
+    f->buff_pos = 0;
+    f->cache_dirty_chars = 0;
+    f->cache_start_file_offset = f->file_offset;
     return 0;
 }
 
@@ -360,5 +315,17 @@ int io300_fetch(struct io300_file* const f) {
     /* This helper should contain the logic for fetching data from the file into the cache. */
     /* Think about how you can use this helper to refactor out some of the logic in your read, write, and seek functions! */
     /* Feel free to add arguments if needed. */
+
+    f->stats.read_calls += 1;
+    ssize_t bytes_read = read(f->fd, f->cache, CACHE_SIZE);
+    if(bytes_read == -1 || bytes_read == 0)
+    {
+        return -1;
+    }
+    f->buff_pos = 0;
+    f->buff_end = bytes_read;
+    f->cache_start_file_offset = f->file_offset;
+    f->file_offset += bytes_read;
+
     return 0;
 }
