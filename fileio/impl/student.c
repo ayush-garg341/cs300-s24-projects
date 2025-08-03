@@ -157,41 +157,22 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
     f->stats.seeks++;
 
     // If seeking then we might have to do cache invalidation as seek pos might not be in cache range...
+    if(f->is_dirty && f->write_mode)
+    {
+        // Flush the cache as it is dirty...
+        int flushed = io300_flush(f);
+        if(flushed == -1)
+        {
+            return -1;
+        }
+    }
+    else {
+        // Invalidate it..
+        f->buff_end = 0;
+        f->buff_pos = 0;
+    }
     f->file_offset = pos;
-
-    size_t cache_start = f->cache_start_file_offset;
-    size_t valid_cache_end = cache_start + (f->buff_pos - f->cache_dirty_chars);
-
-    // Check if seeking beyond EOF
-    off_t file_size = io300_filesize(f);
-
-    if((size_t)pos < cache_start || (size_t)pos > valid_cache_end)
-    {
-        if(f->is_dirty && f->write_mode)
-        {
-            // Flush the cache as it is dirty...
-            int flushed = io300_flush(f);
-            if(flushed == -1)
-            {
-                return -1;
-            }
-        }
-        else {
-            // Invalidate it..
-            f->buff_end = 0;
-            f->buff_pos = 0;
-        }
-
-        if(pos > file_size)
-        {
-            return lseek(f->fd, pos, SEEK_SET);
-        }
-    }
-    else
-    {
-        // Seek position is valid, just move the buffer position.
-        f->buff_pos = pos - f->cache_start_file_offset;
-    }
+    f->cache_start_file_offset = pos;
 
     return lseek(f->fd, pos, SEEK_SET);
 }
@@ -298,14 +279,133 @@ int io300_writec(struct io300_file* f, int ch) {
 ssize_t io300_read(struct io300_file* const f, char* const buff,
                    size_t const sz) {
     check_invariants(f);
-    // TODO: Implement this
-    return read(f->fd, buff, sz);
+
+    if(f->is_dirty && f->write_mode == true)
+    {
+        int flushed = io300_flush(f);
+        if(flushed == -1)
+        {
+            return -1;
+        }
+        f->write_mode = false;
+    }
+
+    size_t valid_cache_left = f->buff_end - f->buff_pos;
+
+    // sz is greater than cache size
+    if(sz > CACHE_SIZE)
+    {
+        // Invalid cache
+        f->buff_pos = 0;
+        f->buff_end = 0;
+
+        // return from file directly
+        ssize_t bytes_read = read(f->fd, buff, sz);
+        f->file_offset += bytes_read;
+        return bytes_read;
+    }
+
+    if(sz > valid_cache_left)
+    {
+        // Invalid cache
+        f->buff_pos = 0;
+        f->buff_end = 0;
+
+        // Refill
+        int fetched = io300_fetch(f);
+        if(fetched == -1)
+        {
+            return -1;
+        }
+
+    }
+
+    // Identifying that cache is empty or full and need reloading with new data
+    if(f->buff_end == 0 || (f->buff_pos >= f->buff_end))
+    {
+        int fetched = io300_fetch(f);
+        if(fetched == -1)
+        {
+            return -1;
+        }
+    }
+
+    memcpy(buff, &f->cache[f->buff_pos], sz);
+
+    f->buff_pos += sz;
+
+    return (ssize_t)sz;
 }
+
+
 ssize_t io300_write(struct io300_file* const f, const char* buff,
                     size_t const sz) {
     check_invariants(f);
-    // TODO: Implement this
-    return write(f->fd, buff, sz);
+
+    // Switching from read to write
+    if(!f->is_dirty && f->buff_pos == CACHE_SIZE && f->write_mode == false)
+    {
+        f->buff_pos = 0;
+    }
+
+    // Writing more than Cache Size
+    if(sz > CACHE_SIZE)
+    {
+        // Invalid cache
+        if(f->is_dirty && f->write_mode)
+        {
+            int flushed = io300_flush(f);
+            if(flushed == -1)
+            {
+                return -1;
+            }
+        }
+
+        // Write into file directly
+        ssize_t bytes_written = write(f->fd, buff, sz);
+        f->file_offset += bytes_written;
+        return bytes_written;
+    }
+
+    // Writing more than valid cache size left.
+    size_t valid_cache_left = f->buff_end - f->buff_pos;
+    if(sz > valid_cache_left)
+    {
+
+        if(f->is_dirty && f->write_mode)
+        {
+            int flushed = io300_flush(f);
+            if(flushed == -1)
+            {
+                return -1;
+            }
+
+        }
+        else {
+            f->buff_pos = 0;
+            f->buff_end = 0;
+        }
+
+    }
+
+    // If cache is full and dirty, flush it
+    if(f->is_dirty && f->buff_pos == CACHE_SIZE)
+    {
+        int flushed = io300_flush(f);
+        if(flushed == -1)
+        {
+            return -1;
+        }
+    }
+
+    // Else going down the happy path
+
+    memcpy(&f->cache[f->buff_pos], buff, sz);
+    f->is_dirty = true;
+    f->cache_dirty_chars += sz;
+    f->write_mode = true;
+
+    return (ssize_t)sz;
 }
 
 int io300_flush(struct io300_file* const f) {
@@ -321,7 +421,7 @@ int io300_flush(struct io300_file* const f) {
     off_t seek_pos = f->cache_start_file_offset + start_dirty;
     if(f->file_offset != (size_t)seek_pos)
     {
-        int res = io300_seek(f, seek_pos);
+        int res = lseek(f->fd, seek_pos, SEEK_SET);
         if(res == -1)
         {
             return -1;
