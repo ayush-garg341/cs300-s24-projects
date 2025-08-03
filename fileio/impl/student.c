@@ -156,7 +156,43 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
     check_invariants(f);
     f->stats.seeks++;
 
-    // TODO: Implement this
+    // If seeking then we might have to do cache invalidation as seek pos might not be in cache range...
+    f->file_offset = pos;
+
+    size_t cache_start = f->cache_start_file_offset;
+    size_t valid_cache_end = cache_start + (f->buff_pos - f->cache_dirty_chars);
+
+    // Check if seeking beyond EOF
+    off_t file_size = io300_filesize(f);
+
+    if((size_t)pos < cache_start || (size_t)pos > valid_cache_end)
+    {
+        if(f->is_dirty && f->write_mode)
+        {
+            // Flush the cache as it is dirty...
+            int flushed = io300_flush(f);
+            if(flushed == -1)
+            {
+                return -1;
+            }
+        }
+        else {
+            // Invalidate it..
+            f->buff_end = 0;
+            f->buff_pos = 0;
+        }
+
+        if(pos > file_size)
+        {
+            return lseek(f->fd, pos, SEEK_SET);
+        }
+    }
+    else
+    {
+        // Seek position is valid, just move the buffer position.
+        f->buff_pos = pos - f->cache_start_file_offset;
+    }
+
     return lseek(f->fd, pos, SEEK_SET);
 }
 
@@ -201,6 +237,8 @@ int io300_readc(struct io300_file* const f) {
 
     // If cache is dirty, flush it and reload the cache, so that appropriate value is read.
     // Switching from writing to reading, flushing cache
+    //
+    // TODO: It can be optimized so that when buffer is full, it is flushed only then, else keep serving from dirty cache.
     if(f->is_dirty && f->write_mode == true)
     {
         int flushed = io300_flush(f);
@@ -288,8 +326,6 @@ int io300_flush(struct io300_file* const f) {
         {
             return -1;
         }
-
-        f->file_offset = res;
     }
 
     f->stats.write_calls += 1;
