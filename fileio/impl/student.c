@@ -254,6 +254,7 @@ int io300_writec(struct io300_file* f, int ch) {
     if(!f->is_dirty && f->buff_pos == CACHE_SIZE && f->write_mode == false)
     {
         f->buff_pos = 0;
+        f->buff_end = 0;
     }
 
 
@@ -354,17 +355,11 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
                     size_t const sz) {
     check_invariants(f);
 
-    // Switching from read to write
-    if(!f->is_dirty && f->buff_pos == CACHE_SIZE && f->write_mode == false)
+    // Cache is dirty
+    if(f->is_dirty && f->write_mode)
     {
-        f->buff_pos = 0;
-    }
-
-    // Writing more than Cache Size
-    if(sz > CACHE_SIZE)
-    {
-        // Invalid cache
-        if(f->is_dirty && f->write_mode)
+        size_t valid_cache_left = f->buff_end - f->buff_pos;
+        if(sz > valid_cache_left || sz > CACHE_SIZE)
         {
             int flushed = io300_flush(f);
             if(flushed == -1)
@@ -373,50 +368,57 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
             }
         }
 
-        // Write into file directly
-        f->stats.write_calls++;
-        ssize_t bytes_written = write(f->fd, buff, sz);
-        f->file_offset += bytes_written;
-        return bytes_written;
-    }
-
-    // Writing more than valid cache size left.
-    size_t valid_cache_left = f->buff_end - f->buff_pos;
-    if(sz > valid_cache_left)
-    {
-
-        if(f->is_dirty && f->write_mode)
+        if(sz > CACHE_SIZE)
         {
-            int flushed = io300_flush(f);
-            if(flushed == -1)
-            {
-                return -1;
-            }
-
+            // Write into file directly
+            f->stats.write_calls++;
+            ssize_t bytes_written = write(f->fd, buff, sz);
+            f->file_offset += bytes_written;
+            return bytes_written;
         }
-        else {
+        else
+        {
+            memcpy(&f->cache[f->buff_pos], buff, sz);
+            f->is_dirty = true;
+            f->cache_dirty_chars += sz;
+            f->buff_pos += sz;
+            f->write_mode = true;
+            return (ssize_t)sz;
+        }
+    }
+    else // cache is not dirty and switching from reading to writing or we are first writing without reading...
+    {
+        // Cache is full
+        if(f->buff_pos == CACHE_SIZE) {
             f->buff_pos = 0;
             f->buff_end = 0;
         }
 
-    }
+        // Get correct offset
+        size_t valid_cache_left = f->buff_end - f->buff_pos;
 
-    // If cache is full and dirty, flush it
-    if(f->is_dirty && f->buff_pos == CACHE_SIZE)
-    {
-        int flushed = io300_flush(f);
-        if(flushed == -1)
+        if(sz <= valid_cache_left && f->buff_end != 0)
         {
-            return -1;
+            memcpy(&f->cache[f->buff_pos], buff, sz);
+            f->buff_pos += sz;
+            f->is_dirty = true;
+            f->cache_dirty_chars += sz;
+            f->write_mode = true;
+            return (ssize_t)sz;
         }
+        else {
+            // sz > valid cache left
+            f->buff_pos = 0;
+            f->buff_end = 0;
+
+            f->stats.write_calls++;
+            ssize_t bytes_written = write(f->fd, buff, sz);
+            f->file_offset += bytes_written;
+            return (ssize_t)sz;
+        }
+
     }
 
-    // Else going down the happy path
-
-    memcpy(&f->cache[f->buff_pos], buff, sz);
-    f->is_dirty = true;
-    f->cache_dirty_chars += sz;
-    f->write_mode = true;
 
     return (ssize_t)sz;
 }
