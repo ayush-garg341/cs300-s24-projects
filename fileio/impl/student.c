@@ -228,13 +228,14 @@ int io300_readc(struct io300_file* const f) {
             return -1;
         }
         f->write_mode = false;
+        f->is_dirty = false;
     }
 
     // Identifying that cache is empty or full and need reloading with new data
     if(f->buff_end == 0 || (f->buff_pos >= f->buff_end))
     {
         int fetched = io300_fetch(f);
-        if(fetched == -1)
+        if(fetched == -1 || fetched == 0)
         {
             return -1;
         }
@@ -288,9 +289,28 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
             return -1;
         }
         f->write_mode = false;
+        f->is_dirty = false;
     }
 
     size_t valid_cache_left = f->buff_end - f->buff_pos;
+
+    // We can have an edge case, where we first filled cache but read fewer bytes and then reading again more bytes, we might have to shift our file offset in order to make it work correctly.
+
+    if(sz > valid_cache_left && f->buff_end != 0)
+    {
+        // Reset the internal file offset.
+        off_t seek_pos = f->cache_start_file_offset + f->buff_pos;
+        f->stats.seeks++;
+        int reset = lseek(f->fd, seek_pos, SEEK_SET);
+        if(reset == -1)
+        {
+            return -1;
+        }
+        f->file_offset = reset;
+        f->buff_pos = 0;
+        f->buff_end = 0;
+    }
+
 
     // sz is greater than cache size
     if(sz > CACHE_SIZE)
@@ -300,24 +320,10 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
         f->buff_end = 0;
 
         // return from file directly
+        f->stats.read_calls++;
         ssize_t bytes_read = read(f->fd, buff, sz);
         f->file_offset += bytes_read;
         return bytes_read;
-    }
-
-    if(sz > valid_cache_left)
-    {
-        // Invalid cache
-        f->buff_pos = 0;
-        f->buff_end = 0;
-
-        // Refill
-        int fetched = io300_fetch(f);
-        if(fetched == -1)
-        {
-            return -1;
-        }
-
     }
 
     // Identifying that cache is empty or full and need reloading with new data
@@ -330,11 +336,17 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
         }
     }
 
-    memcpy(buff, &f->cache[f->buff_pos], sz);
+    // It might be possible that cache has only 3 valid bytes left with buff end = 3 and buff pos = 0, reading more than 3 bytes will give garbage data, so need to have a check of valid bytes return. It's not always possible to return sz bytes correctly from cache.
+    int valid_read = sz;
+    if (sz > f->buff_end - f->buff_pos) {
+        valid_read = f->buff_end - f->buff_pos;
+    }
 
-    f->buff_pos += sz;
+    memcpy(buff, &f->cache[f->buff_pos], valid_read);
 
-    return (ssize_t)sz;
+    f->buff_pos += valid_read;
+
+    return (ssize_t)valid_read;
 }
 
 
@@ -362,6 +374,7 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
         }
 
         // Write into file directly
+        f->stats.write_calls++;
         ssize_t bytes_written = write(f->fd, buff, sz);
         f->file_offset += bytes_written;
         return bytes_written;
@@ -421,11 +434,13 @@ int io300_flush(struct io300_file* const f) {
     off_t seek_pos = f->cache_start_file_offset + start_dirty;
     if(f->file_offset != (size_t)seek_pos)
     {
+        f->stats.seeks++;
         int res = lseek(f->fd, seek_pos, SEEK_SET);
         if(res == -1)
         {
             return -1;
         }
+        f->file_offset = res;
     }
 
     f->stats.write_calls += 1;
@@ -443,7 +458,7 @@ int io300_flush(struct io300_file* const f) {
     f->buff_end = 0;
     f->cache_dirty_chars = 0;
     f->cache_start_file_offset = f->file_offset;
-    return 0;
+    return bytes_written;
 }
 
 int io300_fetch(struct io300_file* const f) {
@@ -455,7 +470,7 @@ int io300_fetch(struct io300_file* const f) {
 
     f->stats.read_calls += 1;
     ssize_t bytes_read = read(f->fd, f->cache, CACHE_SIZE);
-    if(bytes_read == -1 || bytes_read == 0)
+    if(bytes_read == -1)
     {
         return -1;
     }
@@ -464,5 +479,5 @@ int io300_fetch(struct io300_file* const f) {
     f->cache_start_file_offset = f->file_offset;
     f->file_offset += bytes_read;
 
-    return 0;
+    return bytes_read;
 }
