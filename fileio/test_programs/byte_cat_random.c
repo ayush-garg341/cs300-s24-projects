@@ -6,7 +6,7 @@
 
 int main(int argc, char* argv[]) {
     if (argc != 2) {
-        fprintf(stderr, "usage: %s <in-file> <out-file>\n", argv[0]);
+        fprintf(stderr, "usage: %s <in-file>\n", argv[0]);
         return 1;
     }
     struct io300_file* in = io300_open(argv[1], "\e[0;31min\e[0m");
