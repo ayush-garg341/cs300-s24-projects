@@ -279,7 +279,7 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
         f->write_mode = false;
     }
 
-    size_t valid_cache_left = f->buff_end - f->buff_pos;
+    size_t valid_cache_left = (f->buff_end > f->buff_pos) ? f->buff_end - f->buff_pos : CACHE_SIZE - f->buff_pos;
 
     // We can have an edge case, where we first filled cache but read fewer bytes and then reading again more bytes, we might have to shift our file offset in order to make it work correctly.
 
@@ -287,14 +287,17 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
     {
         // Reset the internal file offset.
         off_t seek_pos = f->cache_start_file_offset + f->buff_pos;
-        f->stats.seeks++;
-        int reset = lseek(f->fd, seek_pos, SEEK_SET);
-        if(reset == -1)
+        if(f->file_offset != (size_t)seek_pos)
         {
-            return -1;
+            f->stats.seeks++;
+            int reset = lseek(f->fd, seek_pos, SEEK_SET);
+            if(reset == -1)
+            {
+                return -1;
+            }
+            f->file_offset = reset;
+            f->cache_start_file_offset = reset;
         }
-        f->file_offset = reset;
-        f->cache_start_file_offset = reset;
         f->buff_pos = 0;
         f->buff_end = 0;
     }
@@ -362,7 +365,7 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
             f->buff_end = 0;
         }
 
-        size_t valid_cache_left = f->buff_end - f->buff_pos ? f->buff_end != 0 : CACHE_SIZE;
+        size_t valid_cache_left = (f->buff_end > f->buff_pos) ? f->buff_end - f->buff_pos : CACHE_SIZE - f->buff_pos;
         if(sz <= valid_cache_left)
         {
             // write into cache
@@ -411,7 +414,8 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
             f->write_mode = false;
         }
 
-        size_t valid_cache_left = f->buff_end - f->buff_pos ? f->buff_end != 0 : CACHE_SIZE;
+        size_t valid_cache_left = (f->buff_end > f->buff_pos) ? f->buff_end - f->buff_pos : CACHE_SIZE - f->buff_pos;
+
         if(sz <= valid_cache_left)
         {
             memcpy(&f->cache[f->buff_pos], buff, sz);
