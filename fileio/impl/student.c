@@ -161,6 +161,7 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
         {
             return -1;
         }
+        f->write_mode = false;
     }
     else {
         // Invalidate it..
@@ -301,14 +302,16 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
     {
         // Reset the internal file offset.
         off_t seek_pos = f->cache_start_file_offset + f->buff_pos;
-        f->stats.seeks++;
-        int reset = lseek(f->fd, seek_pos, SEEK_SET);
-        if(reset == -1)
-        {
-            return -1;
+        if(f->file_offset != (size_t)seek_pos) {
+            f->stats.seeks++;
+            int reset = lseek(f->fd, seek_pos, SEEK_SET);
+            if(reset == -1)
+            {
+                return -1;
+            }
+            f->file_offset = reset;
+            f->cache_start_file_offset = f->file_offset;
         }
-        f->file_offset = reset;
-        f->cache_start_file_offset = f->file_offset;
 
         // Invalid cache
         f->buff_pos = 0;
@@ -372,14 +375,17 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
         else {
             // Seek to correct position
             off_t seek_pos = f->cache_start_file_offset + f->buff_pos;
-            f->stats.seeks++;
-            int reset = lseek(f->fd, seek_pos, SEEK_SET);
-            if(reset == -1)
+            if(f->file_offset != (size_t)seek_pos)
             {
-                return -1;
+                f->stats.seeks++;
+                int reset = lseek(f->fd, seek_pos, SEEK_SET);
+                if(reset == -1)
+                {
+                    return -1;
+                }
+                f->file_offset = reset;
+                f->cache_start_file_offset = f->file_offset;
             }
-            f->file_offset = reset;
-            f->cache_start_file_offset = f->file_offset;
 
             // Invalidate it
             f->buff_pos = 0;
@@ -402,6 +408,7 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
             {
                 return -1;
             }
+            f->write_mode = false;
         }
 
         size_t valid_cache_left = f->buff_end - f->buff_pos ? f->buff_end != 0 : CACHE_SIZE;
