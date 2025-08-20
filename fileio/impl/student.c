@@ -164,9 +164,18 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
         f->write_mode = false;
     }
     else {
-        // Invalidate it..
-        f->buff_end = 0;
-        f->buff_pos = 0;
+        // seek pos is outside of current cache range.
+        if((size_t)pos < f->cache_start_file_offset || (size_t)pos >= (f->cache_start_file_offset + f->buff_end))
+        {
+            // Invalidate it..
+            f->buff_end = 0;
+            f->buff_pos = 0;
+        }
+        else {
+            // when we seek inside valid cache range, we have to move buff pos as well.
+            f->buff_pos = pos - f->cache_start_file_offset;
+            return 0;
+        }
     }
     f->file_offset = pos;
     f->cache_start_file_offset = pos;
