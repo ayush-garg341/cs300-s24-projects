@@ -78,4 +78,7 @@ int io300_flush(struct io300_file* f);
 */
 int io300_fetch(struct io300_file* f);
 
+
+int io300_adaptive_fetch(struct io300_file* f);
+
 #endif

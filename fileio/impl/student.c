@@ -32,6 +32,16 @@
 #error "if this is not done, the autograder will not run"
 #endif
 
+// Threshold to identify the confidence for adaptive caching
+#ifndef CONFIDENCE_THRESHOLD
+#define CONFIDENCE_THRESHOLD 3
+#endif
+
+// Prefetch N blocks of cache size
+#ifndef PREFETCH_SIZE
+#define PREFETCH_SIZE 2
+#endif
+
 /*
    This macro enables/disables the dbg() function. Use it to silence your
    debugging info.
@@ -51,8 +61,17 @@ struct io300_file {
     size_t buff_pos;
     size_t buff_end;
     size_t cache_start_file_offset;
-    size_t cache_dirty_chars;
     bool write_mode;
+
+    // For adaptive caching
+    size_t last_seek_offset;
+    int direction; // -1 for backward and 1 for forward and 0 for unknown
+    int confidence;
+    int prefetch_buffer_hit_count; // number of times we hit the prefetch buffer
+    size_t valid_prefetch_bytes;
+    size_t prefetch_offset;
+    char* prefetch_buffer;
+    bool prefetch_buffer_end;
 
 
     /* Used for debugging, keep track of which io300_file is which */
@@ -77,7 +96,11 @@ static void check_invariants(struct io300_file* f) {
 
     assert(f->buff_pos <= CACHE_SIZE);
     assert(f->buff_end <= CACHE_SIZE);
-    assert(f->cache_dirty_chars <= CACHE_SIZE);
+
+    // check for adaptive caching
+    assert(f->direction == 1 || f->direction == -1);
+    assert(f->valid_prefetch_bytes <= PREFETCH_SIZE * CACHE_SIZE);
+    assert(f->prefetch_offset <= PREFETCH_SIZE * CACHE_SIZE);
 }
 
 /*
@@ -130,18 +153,36 @@ struct io300_file* io300_open(const char* const path, char* description) {
         free(ret);
         return NULL;
     }
+
+    ret->prefetch_buffer = malloc(PREFETCH_SIZE * CACHE_SIZE);
+    if(ret->prefetch_buffer == NULL) {
+        fprintf(stderr, "error: could not allocate prefetch cache\n");
+        close(ret->fd);
+        free(ret);
+        return NULL;
+
+    }
+
     ret->description = description;
 
     ret->file_offset = 0;
     ret->buff_pos = 0;
     ret->buff_end = 0;
     ret->cache_start_file_offset = 0;
-    ret->cache_dirty_chars = 0;
     ret->write_mode = false;
 
     ret->stats.read_calls = 0;
     ret->stats.write_calls = 0;
     ret->stats.seeks = 0;
+
+    // for adaptive caching
+    ret->last_seek_offset = 0;
+    ret->confidence = 0;
+    ret->direction = 1;
+    ret->prefetch_buffer_hit_count = 0;
+    ret->valid_prefetch_bytes = 0;
+    ret->prefetch_offset = 0;
+    ret->prefetch_buffer_end = false;
 
     check_invariants(ret);
     dbg(ret, "Just finished initializing file from path: %s\n", path);
@@ -152,8 +193,17 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
     check_invariants(f);
     f->stats.seeks++;
 
+    // Check the direction
+    f->direction = pos >= 0 && (unsigned long)pos >= f->last_seek_offset ? 1 : -1;
+
+    // Reset confidence to 0
+    f->confidence = 0;
+
+    // Update the last_seek_offset to current pos
+    f->last_seek_offset = pos;
+
     // If seeking then we might have to do cache invalidation as seek pos might not be in cache range...
-    if(f->write_mode && f->cache_dirty_chars > 0)
+    if(f->write_mode)
     {
         // Flush the cache as it is dirty...
         int flushed = io300_flush(f);
@@ -170,6 +220,10 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
             // Invalidate it..
             f->buff_end = 0;
             f->buff_pos = 0;
+
+            // Invalidate the prefetch buffer as well.
+            f->valid_prefetch_bytes = 0;
+            f->prefetch_offset = 0;
         }
         else {
             // when we seek inside valid cache range, we have to move buff pos as well.
@@ -187,7 +241,7 @@ int io300_close(struct io300_file* const f) {
     check_invariants(f);
 
     // Flush the cache if it's dirty
-    if(f->write_mode == true && f->cache_dirty_chars > 0)
+    if(f->write_mode == true)
     {
         int flushed = io300_flush(f);
         if(flushed == -1)
@@ -197,12 +251,13 @@ int io300_close(struct io300_file* const f) {
     }
 
 #if (DEBUG_STATISTICS == 1)
-    printf("stats: {desc: %s, read_calls: %d, write_calls: %d, seeks: %d}\n",
+    printf("stats: {desc: %s, read_calls: %d, write_calls: %d, seeks: %d, prefetch_buffer_hit: %d}\n",
            f->description, f->stats.read_calls, f->stats.write_calls,
-           f->stats.seeks);
+           f->stats.seeks, f->prefetch_buffer_hit_count);
 #endif
     close(f->fd);
     free(f->cache);
+    free(f->prefetch_buffer);
     free(f);
     return 0;
 }
@@ -221,7 +276,7 @@ off_t io300_filesize(struct io300_file* const f) {
 int io300_readc(struct io300_file* const f) {
     check_invariants(f);
 
-    if(f->write_mode == true)
+    if(f->write_mode == true && f->buff_pos >= f->buff_end)
     {
         // Flush the cache
         int flushed = io300_flush(f);
@@ -232,15 +287,80 @@ int io300_readc(struct io300_file* const f) {
         f->write_mode = false;
     }
 
+
+    // If we do not have valid prefetch cache
+    if(f->valid_prefetch_bytes == 0 && f->confidence >= CONFIDENCE_THRESHOLD && f->prefetch_buffer_end == false)
+    {
+        // Populate from disk..
+
+        int bytes_read;
+        // Direction is forward
+        if(f->direction == 1)
+        {
+
+            bytes_read = io300_adaptive_fetch(f);
+            if(bytes_read == -1)
+            {
+                return -1;
+            }
+            if(bytes_read == 0)
+            {
+                f->prefetch_buffer_end = true;
+            }
+
+        }
+
+        // Direction is backward
+        if(f->direction == -1)
+        {
+            bytes_read = 0;
+        }
+
+        f->valid_prefetch_bytes = bytes_read;
+    }
+
     // Buffer is empty or full
     if(f->buff_end == 0 || (f->buff_pos >= f->buff_end))
     {
-        int bytes_read = io300_fetch(f);
-        if(bytes_read == -1 || bytes_read == 0)
+
+        // Check if already prefetched the memory..
+        if(f->valid_prefetch_bytes > 0)
         {
-            return -1;
+            f->prefetch_buffer_hit_count += 1;
+            size_t remaining = f->valid_prefetch_bytes - f->prefetch_offset;
+            size_t copy_size = remaining >= CACHE_SIZE ? CACHE_SIZE: remaining;
+            memcpy(f->cache, f->prefetch_buffer + f->prefetch_offset, copy_size);
+            f->prefetch_offset += copy_size;
+
+            if(f->prefetch_offset >= f->valid_prefetch_bytes)
+            {
+                // Case when buffer is fully consumed..
+                f->valid_prefetch_bytes = 0;
+                f->prefetch_offset = 0;
+            }
+
+            // Change the buff pos, buff end, cache start file offset and file offset.
+            f->buff_pos = 0;
+            f->buff_end = copy_size;
+            f->cache_start_file_offset = f->file_offset;
+            f->file_offset += copy_size;
+            int reset = lseek(f->fd, f->file_offset, SEEK_SET);
+            if(reset == -1)
+            {
+                return -1;
+            }
+
+        }
+        else {
+            int bytes_read = io300_fetch(f);
+            if(bytes_read == -1 || bytes_read == 0)
+            {
+                return -1;
+            }
         }
     }
+
+    f->confidence += 1;
 
     return (unsigned char)f->cache[f->buff_pos++];
 }
@@ -255,6 +375,11 @@ int io300_writec(struct io300_file* f, int ch) {
         f->buff_pos = 0;
         f->buff_end = 0;
         f->cache_start_file_offset += CACHE_SIZE;
+
+        // Flush the prefetch cache, it is staled at this point.
+        f->valid_prefetch_bytes = 0;
+        f->confidence = 0;
+        f->prefetch_offset = 0;
     }
 
     if(f->write_mode == true && f->buff_pos == CACHE_SIZE)
@@ -269,7 +394,6 @@ int io300_writec(struct io300_file* f, int ch) {
 
     f->cache[f->buff_pos++] = c;
     f->write_mode = true;
-    f->cache_dirty_chars += 1;
 
     return ch;
 }
@@ -278,7 +402,7 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
                    size_t const sz) {
     check_invariants(f);
 
-    if(f->write_mode == true && f->cache_dirty_chars > 0)
+    if(f->write_mode == true)
     {
         int flushed = io300_flush(f);
         if(flushed == -1)
@@ -288,7 +412,37 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
         f->write_mode = false;
     }
 
-    size_t valid_cache_left = (f->buff_end > f->buff_pos) ? f->buff_end - f->buff_pos : CACHE_SIZE - f->buff_pos;
+    size_t valid_cache_left = (f->buff_end > f->buff_pos) ? f->buff_end - f->buff_pos : f->valid_prefetch_bytes - f->prefetch_offset;
+
+    if(f->valid_prefetch_bytes == 0 && f->confidence >= CONFIDENCE_THRESHOLD && f->prefetch_buffer_end == false)
+    {
+        // Populate from disk..
+
+        int bytes_read;
+        // Direction is forward
+        if(f->direction == 1)
+        {
+
+            bytes_read = io300_adaptive_fetch(f);
+            if(bytes_read == -1)
+            {
+                return -1;
+            }
+            if(bytes_read == 0)
+            {
+                f->prefetch_buffer_end = true;
+            }
+
+        }
+
+        // Direction is backward
+        if(f->direction == -1)
+        {
+            bytes_read = 0;
+        }
+
+        f->valid_prefetch_bytes = bytes_read;
+    }
 
     // We can have an edge case, where we first filled cache but read fewer bytes and then reading again more bytes, we might have to shift our file offset in order to make it work correctly.
 
@@ -307,8 +461,16 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
             f->file_offset = reset;
             f->cache_start_file_offset = reset;
         }
+
+        // Invalidate it
         f->buff_pos = 0;
         f->buff_end = 0;
+
+        // Invalidate prefetch buffer
+        f->valid_prefetch_bytes = 0;
+        f->prefetch_offset = 0;
+        f->confidence = 0;
+
     }
     else if(sz > CACHE_SIZE)     // sz is greater than cache size
     {
@@ -329,6 +491,11 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
         f->buff_pos = 0;
         f->buff_end = 0;
 
+        // Invalidate prefetch buffer
+        f->valid_prefetch_bytes = 0;
+        f->prefetch_offset = 0;
+        f->confidence = 0;
+
         // return from file directly, changing file offset
         f->stats.read_calls++;
         ssize_t bytes_read = read(f->fd, buff, sz);
@@ -340,11 +507,41 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
     // Identifying that cache is empty or full and need reloading with new data
     if(f->buff_end == 0 || (f->buff_pos >= f->buff_end))
     {
-        int fetched = io300_fetch(f);
-        if(fetched == -1)
+        // Check if already prefetched the memory..
+        if(f->valid_prefetch_bytes > 0)
         {
-            return -1;
+            f->prefetch_buffer_hit_count += 1;
+            size_t remaining = f->valid_prefetch_bytes - f->prefetch_offset;
+            size_t copy_size = remaining >= CACHE_SIZE ? CACHE_SIZE: remaining;
+            memcpy(f->cache, f->prefetch_buffer + f->prefetch_offset, copy_size);
+            f->prefetch_offset += copy_size;
+
+            if(f->prefetch_offset >= f->valid_prefetch_bytes)
+            {
+                // Case when buffer is fully consumed..
+                f->valid_prefetch_bytes = 0;
+                f->prefetch_offset = 0;
+            }
+
+            // Change the buff pos, buff end, cache start file offset and file offset.
+            f->buff_pos = 0;
+            f->buff_end = copy_size;
+            f->cache_start_file_offset = f->file_offset;
+            f->file_offset += copy_size;
+            int reset = lseek(f->fd, f->file_offset, SEEK_SET);
+            if(reset == -1)
+            {
+                return -1;
+            }
         }
+        else {
+            int fetched = io300_fetch(f);
+            if(fetched == -1)
+            {
+                return -1;
+            }
+        }
+
     }
 
     // It might be possible that cache has only 3 valid bytes left with buff end = 3 and buff pos = 0, reading more than 3 bytes will give garbage data, so need to have a check of valid bytes return. It's not always possible to return sz bytes correctly from cache.
@@ -356,6 +553,8 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
     memcpy(buff, &f->cache[f->buff_pos], valid_read);
 
     f->buff_pos += valid_read;
+
+    f->confidence += 1;
 
     return (ssize_t)valid_read;
 }
@@ -372,6 +571,11 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
             f->cache_start_file_offset += CACHE_SIZE;
             f->buff_pos = 0;
             f->buff_end = 0;
+
+            // Invalidating the prefetch buffer, it will be stale.
+            f->valid_prefetch_bytes = 0;
+            f->confidence = 0;
+            f->prefetch_offset = 0;
         }
 
         size_t valid_cache_left = (f->buff_end > f->buff_pos) ? f->buff_end - f->buff_pos : CACHE_SIZE - f->buff_pos;
@@ -379,7 +583,6 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
         {
             // write into cache
             memcpy(&f->cache[f->buff_pos], buff, sz);
-            f->cache_dirty_chars += sz;
             f->buff_pos += sz;
             f->write_mode = true;
             return (ssize_t)sz;
@@ -402,6 +605,12 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
             // Invalidate it
             f->buff_pos = 0;
             f->buff_end = 0;
+
+            // Invalidating the prefetch buffer, it will be stale.
+            f->valid_prefetch_bytes = 0;
+            f->confidence = 0;
+            f->prefetch_offset = 0;
+
 
             // Write into file directly
             f->stats.write_calls++;
@@ -428,14 +637,13 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
         if(sz <= valid_cache_left)
         {
             memcpy(&f->cache[f->buff_pos], buff, sz);
-            f->cache_dirty_chars += sz;
             f->buff_pos += sz;
             f->write_mode = true;
             return (ssize_t)sz;
         }
         else {
 
-            if(f->cache_dirty_chars > 0 && f->write_mode)
+            if(f->write_mode)
             {
                 int flushed = io300_flush(f);
                 if(flushed == -1)
@@ -461,10 +669,11 @@ int io300_flush(struct io300_file* const f) {
     // Flush the cache in a file
     // Increment the user maintained file offset by those dirty characters, it should be matching with internal file offset maintained by kernel.
 
-    // Finding the index where dirty characters begin from
-    size_t start_dirty = f->buff_pos - f->cache_dirty_chars;
+    // We are flushing the entire cache, not partial
+    size_t dirty_chars = f->buff_pos - 0;
+    size_t start_dirty = 0;
 
-    // Find seek position
+    // // Find seek position
     off_t seek_pos = f->cache_start_file_offset + start_dirty;
     if(f->file_offset != (size_t)seek_pos)
     {
@@ -478,20 +687,26 @@ int io300_flush(struct io300_file* const f) {
     }
 
     f->stats.write_calls += 1;
-    ssize_t bytes_written = write(f->fd, &f->cache[start_dirty], f->cache_dirty_chars);
+    ssize_t bytes_written = write(f->fd, &f->cache[start_dirty], dirty_chars);
     if(bytes_written == -1)
     {
         return -1;
     }
-    if(bytes_written > 0 && (size_t)bytes_written != f->cache_dirty_chars)
+    if(bytes_written > 0 && (size_t)bytes_written != dirty_chars)
     {
         return -1;
     }
     f->file_offset += bytes_written;
     f->buff_pos = 0;
     f->buff_end = 0;
-    f->cache_dirty_chars = 0;
     f->cache_start_file_offset = f->file_offset;
+
+    // When we flush the cache, there is no point in maintaining the prefetch buffer.
+    // Because it is possible that we have changed the offset and hence prefetch buffer is not valid.
+    f->valid_prefetch_bytes = 0;
+    f->confidence = 0;
+    f->prefetch_offset = 0;
+
     return bytes_written;
 }
 
@@ -511,6 +726,32 @@ int io300_fetch(struct io300_file* const f) {
     f->buff_end = bytes_read;
     f->cache_start_file_offset = f->file_offset;
     f->file_offset += bytes_read;
+
+    return bytes_read;
+}
+
+int io300_adaptive_fetch(struct io300_file* f)
+{
+    check_invariants(f);
+
+    f->stats.read_calls += 1;
+    size_t old_offset = f->file_offset;
+    ssize_t bytes_read = read(f->fd, f->prefetch_buffer, PREFETCH_SIZE*CACHE_SIZE);
+    if(bytes_read == -1)
+    {
+        return -1;
+    }
+
+    if(bytes_read == 0)
+    {
+        return 0;
+    }
+
+    int reset = lseek(f->fd, old_offset, SEEK_SET);
+    if(reset == -1)
+    {
+        return -1;
+    }
 
     return bytes_read;
 }
