@@ -224,6 +224,7 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
             // Invalidate the prefetch buffer as well.
             f->valid_prefetch_bytes = 0;
             f->prefetch_offset = 0;
+            f->confidence = 0;
         }
         else {
             // when we seek inside valid cache range, we have to move buff pos as well.
