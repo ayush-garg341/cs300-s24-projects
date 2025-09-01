@@ -61,11 +61,13 @@ struct io300_file {
     size_t buff_pos;
     size_t buff_end;
     size_t cache_start_file_offset;
+    size_t logical_offset;
+    enum ReadDirection direction;
+    enum LastOp last_op;
     bool write_mode;
 
     // For adaptive caching
     size_t last_seek_offset;
-    int direction; // -1 for backward and 1 for forward and 0 for unknown
     int confidence;
     int prefetch_buffer_hit_count; // number of times we hit the prefetch buffer
     size_t valid_prefetch_bytes;
@@ -98,7 +100,8 @@ static void check_invariants(struct io300_file* f) {
     assert(f->buff_end <= CACHE_SIZE);
 
     // check for adaptive caching
-    assert(f->direction == 1 || f->direction == -1);
+    assert(f->direction == FORWARD || f->direction == BACKWARD);
+    assert(f->last_op == READ || f->last_op == WRITE || f->last_op == SEEK);
     assert(f->valid_prefetch_bytes <= PREFETCH_SIZE * CACHE_SIZE);
     assert(f->prefetch_offset <= PREFETCH_SIZE * CACHE_SIZE);
 }
@@ -178,7 +181,8 @@ struct io300_file* io300_open(const char* const path, char* description) {
     // for adaptive caching
     ret->last_seek_offset = 0;
     ret->confidence = 0;
-    ret->direction = 1;
+    ret->direction = FORWARD;
+    ret->last_op = READ;
     ret->prefetch_buffer_hit_count = 0;
     ret->valid_prefetch_bytes = 0;
     ret->prefetch_offset = 0;
@@ -191,10 +195,9 @@ struct io300_file* io300_open(const char* const path, char* description) {
 
 int io300_seek(struct io300_file* const f, off_t const pos) {
     check_invariants(f);
-    f->stats.seeks++;
 
     // Check the direction
-    f->direction = pos >= 0 && (unsigned long)pos >= f->last_seek_offset ? 1 : -1;
+    f->direction = pos >= 0 && (unsigned long)pos >= f->last_seek_offset ? FORWARD : BACKWARD;
 
     // Reset confidence to 0
     f->confidence = 0;
@@ -206,11 +209,9 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
     if(f->write_mode)
     {
         // Flush the cache as it is dirty...
-        int flushed = io300_flush(f);
-        if(flushed == -1)
-        {
+        if(io300_flush(f) == -1)
             return -1;
-        }
+
         f->write_mode = false;
     }
     else {
@@ -232,9 +233,41 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
             return 0;
         }
     }
+
+    enum ReadDirection prev_direction = f->direction;
+
+    if(f->last_seek_offset == 0 && pos == io300_filesize(f) - 1)
+    {
+        // It means we have jumped to the end
+        f->direction = BACKWARD;
+    }
+    else {
+        // Check the direction
+        f->direction = pos >= 0 && (unsigned long)pos >= f->last_seek_offset ? FORWARD : BACKWARD;
+    }
+
+    // Reset confidence to 0
+    if(prev_direction != f->direction)
+    {
+        f->confidence = 0;
+
+        // Invalidate it..
+        f->buff_end = 0;
+        f->buff_pos = 0;
+
+        // Invalidate the prefetch buffer as well.
+        f->valid_prefetch_bytes = 0;
+        f->prefetch_offset = 0;
+    }
+
+    // Update the last_seek_offset to current pos
+    f->last_seek_offset = pos;
     f->file_offset = pos;
     f->cache_start_file_offset = pos;
+    f->logical_offset = pos;
+    f->last_op = SEEK;
 
+    f->stats.seeks++;
     return lseek(f->fd, pos, SEEK_SET);
 }
 
@@ -244,11 +277,8 @@ int io300_close(struct io300_file* const f) {
     // Flush the cache if it's dirty
     if(f->write_mode == true)
     {
-        int flushed = io300_flush(f);
-        if(flushed == -1)
-        {
+        if(io300_flush(f) == -1)
             return -1;
-        }
     }
 
 #if (DEBUG_STATISTICS == 1)
@@ -280,11 +310,9 @@ int io300_readc(struct io300_file* const f) {
     if(f->write_mode == true && f->buff_pos >= f->buff_end)
     {
         // Flush the cache
-        int flushed = io300_flush(f);
-        if(flushed == -1)
-        {
+        if(io300_flush(f) == -1)
             return -1;
-        }
+
         f->write_mode = false;
     }
 
@@ -296,7 +324,7 @@ int io300_readc(struct io300_file* const f) {
 
         int bytes_read;
         // Direction is forward
-        if(f->direction == 1)
+        if(f->direction == FORWARD)
         {
 
             bytes_read = io300_adaptive_fetch(f);
@@ -312,7 +340,7 @@ int io300_readc(struct io300_file* const f) {
         }
 
         // Direction is backward
-        if(f->direction == -1)
+        if(f->direction == BACKWARD)
         {
             bytes_read = 0;
         }
@@ -345,11 +373,8 @@ int io300_readc(struct io300_file* const f) {
             f->buff_end = copy_size;
             f->cache_start_file_offset = f->file_offset;
             f->file_offset += copy_size;
-            int reset = lseek(f->fd, f->file_offset, SEEK_SET);
-            if(reset == -1)
-            {
+            if(lseek(f->fd, f->file_offset, SEEK_SET) == -1)
                 return -1;
-            }
 
         }
         else {
@@ -362,8 +387,19 @@ int io300_readc(struct io300_file* const f) {
     }
 
     f->confidence += 1;
-
-    return (unsigned char)f->cache[f->buff_pos++];
+    f->last_op = READ;
+    if(f->direction == BACKWARD)
+    {
+        size_t buff_pos = CACHE_SIZE - (f->buff_pos + 1);
+        unsigned char ch = f->cache[buff_pos];
+        f->buff_pos++;
+        f->logical_offset -= 1;
+        return ch;
+    }
+    else {
+        f->logical_offset += 1;
+        return (unsigned char)f->cache[f->buff_pos++];
+    }
 }
 
 
@@ -386,16 +422,24 @@ int io300_writec(struct io300_file* f, int ch) {
     if(f->write_mode == true && f->buff_pos == CACHE_SIZE)
     {
         // We are writing and cache is full
-        int flushed = io300_flush(f);
-        if(flushed == -1)
-        {
+        if(io300_flush(f) == -1)
             return -1;
-        }
     }
 
-    f->cache[f->buff_pos++] = c;
-    f->write_mode = true;
+    if(f->direction == BACKWARD)
+    {
+        size_t buff_pos = CACHE_SIZE - (f->buff_pos + 1);
+        f->cache[buff_pos] = c;
+        f->buff_pos += 1;
+        f->logical_offset -= 1;
+    }
+    else {
+        f->cache[f->buff_pos++] = c;
+        f->logical_offset += 1;
+    }
 
+    f->write_mode = true;
+    f->last_op = WRITE;
     return ch;
 }
 
@@ -421,7 +465,7 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
 
         int bytes_read;
         // Direction is forward
-        if(f->direction == 1)
+        if(f->direction == FORWARD)
         {
 
             bytes_read = io300_adaptive_fetch(f);
@@ -437,7 +481,7 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
         }
 
         // Direction is backward
-        if(f->direction == -1)
+        if(f->direction == BACKWARD)
         {
             bytes_read = 0;
         }
@@ -456,9 +500,8 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
             f->stats.seeks++;
             int reset = lseek(f->fd, seek_pos, SEEK_SET);
             if(reset == -1)
-            {
                 return -1;
-            }
+
             f->file_offset = reset;
             f->cache_start_file_offset = reset;
         }
@@ -481,9 +524,8 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
             f->stats.seeks++;
             int reset = lseek(f->fd, seek_pos, SEEK_SET);
             if(reset == -1)
-            {
                 return -1;
-            }
+
             f->file_offset = reset;
             f->cache_start_file_offset = f->file_offset;
         }
@@ -529,18 +571,12 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
             f->buff_end = copy_size;
             f->cache_start_file_offset = f->file_offset;
             f->file_offset += copy_size;
-            int reset = lseek(f->fd, f->file_offset, SEEK_SET);
-            if(reset == -1)
-            {
+            if(lseek(f->fd, f->file_offset, SEEK_SET) == -1)
                 return -1;
-            }
         }
         else {
-            int fetched = io300_fetch(f);
-            if(fetched == -1)
-            {
+            if(io300_fetch(f) == -1)
                 return -1;
-            }
         }
 
     }
@@ -596,9 +632,8 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
                 f->stats.seeks++;
                 int reset = lseek(f->fd, seek_pos, SEEK_SET);
                 if(reset == -1)
-                {
                     return -1;
-                }
+
                 f->file_offset = reset;
                 f->cache_start_file_offset = f->file_offset;
             }
@@ -625,11 +660,9 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
 
         if(f->buff_pos == CACHE_SIZE) // Cache is full
         {
-            int flushed = io300_flush(f);
-            if(flushed == -1)
-            {
+            if(io300_flush(f) == -1)
                 return -1;
-            }
+
             f->write_mode = false;
         }
 
@@ -646,11 +679,9 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
 
             if(f->write_mode)
             {
-                int flushed = io300_flush(f);
-                if(flushed == -1)
-                {
+                if(io300_flush(f) == -1)
                     return -1;
-                }
+
                 f->write_mode = false;
             }
 
@@ -681,22 +712,19 @@ int io300_flush(struct io300_file* const f) {
         f->stats.seeks++;
         int res = lseek(f->fd, seek_pos, SEEK_SET);
         if(res == -1)
-        {
             return -1;
-        }
+
         f->file_offset = res;
     }
 
     f->stats.write_calls += 1;
     ssize_t bytes_written = write(f->fd, &f->cache[start_dirty], dirty_chars);
     if(bytes_written == -1)
-    {
         return -1;
-    }
+
     if(bytes_written > 0 && (size_t)bytes_written != dirty_chars)
-    {
         return -1;
-    }
+
     f->file_offset += bytes_written;
     f->buff_pos = 0;
     f->buff_end = 0;
@@ -718,16 +746,47 @@ int io300_fetch(struct io300_file* const f) {
     /* Feel free to add arguments if needed. */
 
     f->stats.read_calls += 1;
-    ssize_t bytes_read = read(f->fd, f->cache, CACHE_SIZE);
-    if(bytes_read == -1)
+    ssize_t bytes_read;
+    if(f->direction == BACKWARD)
     {
-        return -1;
+        size_t bytes_to_seek =  CACHE_SIZE;
+        size_t old_offset = f->file_offset;
+        size_t bytes_to_read = CACHE_SIZE;
+
+        // Reading in reverse direction ...
+        size_t seek_offset;
+        if (old_offset + 1 >= bytes_to_seek) {
+            seek_offset = old_offset + 1 - bytes_to_seek; // valid seek
+            bytes_to_read = CACHE_SIZE;
+        } else {
+            seek_offset = 0; // Clamp to start of file
+            bytes_to_read = old_offset > 0 ? old_offset + 1: 0;
+        }
+
+        // seek to the previous offset
+        if(lseek(f->fd, seek_offset, SEEK_SET) == -1)
+            return -1;
+
+        bytes_read = read(f->fd, f->cache, bytes_to_read);
+
+        if(lseek(f->fd, seek_offset, SEEK_SET) == -1)
+            return -1;
+
+        f->file_offset = seek_offset;
+        f->cache_start_file_offset = f->file_offset;
+
     }
+    else {
+        bytes_read = read(f->fd, f->cache, CACHE_SIZE);
+        f->cache_start_file_offset = f->file_offset;
+        f->file_offset += bytes_read;
+    }
+
+    if(bytes_read == -1)
+        return -1;
+
     f->buff_pos = 0;
     f->buff_end = bytes_read;
-    f->cache_start_file_offset = f->file_offset;
-    f->file_offset += bytes_read;
-
     return bytes_read;
 }
 
@@ -738,21 +797,11 @@ int io300_adaptive_fetch(struct io300_file* f)
     f->stats.read_calls += 1;
     size_t old_offset = f->file_offset;
     ssize_t bytes_read = read(f->fd, f->prefetch_buffer, PREFETCH_SIZE*CACHE_SIZE);
-    if(bytes_read == -1)
-    {
-        return -1;
-    }
+    if(bytes_read == -1 || bytes_read == 0)
+        return bytes_read;
 
-    if(bytes_read == 0)
-    {
-        return 0;
-    }
-
-    int reset = lseek(f->fd, old_offset, SEEK_SET);
-    if(reset == -1)
-    {
+    if(lseek(f->fd, old_offset, SEEK_SET) == -1)
         return -1;
-    }
 
     return bytes_read;
 }

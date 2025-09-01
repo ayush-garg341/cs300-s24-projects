@@ -3,6 +3,9 @@
 
 #include <sys/types.h>
 
+enum ReadDirection { FORWARD, BACKWARD };
+enum LastOp { READ, WRITE, SEEK };
+
 /*
     The exact contents of the io300_file struct are not yet
     specified, that is up to you to define for your implementation.
