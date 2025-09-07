@@ -196,15 +196,6 @@ struct io300_file* io300_open(const char* const path, char* description) {
 int io300_seek(struct io300_file* const f, off_t const pos) {
     check_invariants(f);
 
-    // Check the direction
-    f->direction = pos >= 0 && (unsigned long)pos >= f->last_seek_offset ? FORWARD : BACKWARD;
-
-    // Reset confidence to 0
-    f->confidence = 0;
-
-    // Update the last_seek_offset to current pos
-    f->last_seek_offset = pos;
-
     // If seeking then we might have to do cache invalidation as seek pos might not be in cache range...
     if(f->write_mode)
     {
@@ -229,7 +220,13 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
         }
         else {
             // when we seek inside valid cache range, we have to move buff pos as well.
-            f->buff_pos = pos - f->cache_start_file_offset;
+            if(f->direction == BACKWARD)
+            {
+                f->buff_pos = CACHE_SIZE - ( pos + (CACHE_SIZE - f->buff_end ) - f->cache_start_file_offset ) - 1;
+            }
+            else {
+                f->buff_pos = pos - f->cache_start_file_offset;
+            }
             return 0;
         }
     }
@@ -390,7 +387,7 @@ int io300_readc(struct io300_file* const f) {
     f->last_op = READ;
     if(f->direction == BACKWARD)
     {
-        size_t buff_pos = CACHE_SIZE - (f->buff_pos + 1);
+        size_t buff_pos = CACHE_SIZE - (f->buff_pos + (CACHE_SIZE - f->buff_end) + 1);
         unsigned char ch = f->cache[buff_pos];
         f->buff_pos++;
         f->logical_offset -= 1;
