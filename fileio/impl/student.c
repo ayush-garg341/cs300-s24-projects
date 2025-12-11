@@ -47,6 +47,11 @@ struct io300_file {
     char* cache;
 
     // TODO: Your properties go here
+    uint buff_start;
+    uint buff_end;
+    uint buff_pos;
+    uint logical_file_pos;
+    unsigned short int  is_dirty;
 
     /* Used for debugging, keep track of which io300_file is which */
     char* description;
@@ -69,6 +74,7 @@ static void check_invariants(struct io300_file* f) {
     assert(f->fd >= 0);
 
     // TODO: Add more invariants
+    assert(f->buff_pos <= CACHE_SIZE);
 }
 
 /*
@@ -123,6 +129,11 @@ struct io300_file* io300_open(const char* const path, char* description) {
     }
     ret->description = description;
     // TODO: Initialize your file
+    ret->buff_start = 0;
+    ret->buff_end = 0;
+    ret->buff_pos = 0;
+    ret->is_dirty = 0;
+    ret->logical_file_pos = 0;
 
     check_invariants(ret);
     dbg(ret, "Just finished initializing file from path: %s\n", path);
@@ -133,7 +144,29 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
     check_invariants(f);
     f->stats.seeks++;
 
-    // TODO: Implement this
+    // If offset pos is out of valid cache range
+    if(pos < f->buff_start || pos >= f->buff_end)
+    {
+        // if dirty, flush it
+        if(f->is_dirty == 1)
+        {
+            int n = io300_flush(f);
+            if(n == -1)
+            {
+                return -1;
+            }
+
+        }
+        // Invalidate the cache
+        f->buff_start = pos;
+        f->buff_end = pos;
+        f->buff_pos = 0;
+        f->logical_file_pos = pos;
+    }
+    else {
+        f->buff_pos = pos - f->buff_start;
+        f->logical_file_pos = pos;
+    }
     return lseek(f->fd, pos, SEEK_SET);
 }
 
@@ -145,7 +178,16 @@ int io300_close(struct io300_file* const f) {
            f->description, f->stats.read_calls, f->stats.write_calls,
            f->stats.seeks);
 #endif
-    // TODO: Implement this
+
+    if(f->is_dirty == 1)
+    {
+        int n = io300_flush(f);
+        if(n == -1)
+        {
+            return -1;
+        }
+
+    }
     close(f->fd);
     free(f->cache);
     free(f);
@@ -165,19 +207,78 @@ off_t io300_filesize(struct io300_file* const f) {
 
 int io300_readc(struct io300_file* const f) {
     check_invariants(f);
-    // TODO: Implement this
-    unsigned char c;
-    if (read(f->fd, &c, 1) == 1) {
-        return c;
-    } else {
+
+    // When you first start writing into cache, not read
+    if(f->buff_start == f->buff_end && f->is_dirty == 1)
+    {
+        // flush the cache
+        int n = io300_flush(f);
+        if(n == -1)
+        {
+            return -1;
+        }
+    }
+    else if(f->buff_pos == CACHE_SIZE && f->is_dirty == 1)
+    {
+        // Cache is full and dirty
+        // flush the cache
+        int n = io300_flush(f);
+        if(n == -1)
+        {
+            return -1;
+        }
+    }
+
+    // when cache is either empty or cache is fully consumed
+    if(f->buff_pos == 0 || f->buff_pos == CACHE_SIZE)
+    {
+        // fetch the cache from disk
+        int n = io300_fetch(f);
+        if(n == -1 || n == 0)
+        {
+            return n;
+        }
+    }
+
+    // Case: cache is not full, have fewer bytes and we keep reading from cache while the cache is not valid at current position.
+    if(f->logical_file_pos >= f->buff_end)
+    {
         return -1;
     }
+
+    unsigned char c = (unsigned char)f->cache[f->buff_pos];
+    f->buff_pos += 1;
+    f->logical_file_pos += 1;
+    return c;
 }
+
 int io300_writec(struct io300_file* f, int ch) {
     check_invariants(f);
-    // TODO: Implement this
-    char const c = (char)ch;
-    return write(f->fd, &c, 1) == 1 ? ch : -1;
+
+    // when cache is full and dirty
+    if(f->buff_pos == CACHE_SIZE && f->is_dirty == 1)
+    {
+        // flush the cache
+        int n = io300_flush(f);
+        if(n == -1)
+        {
+            return -1;
+        }
+    }
+    else if(f->buff_pos == CACHE_SIZE)
+    {
+        // when cache is fully consumed and not dirty
+
+        f->buff_start = f->logical_file_pos;
+        f->buff_end = f->logical_file_pos;
+        f->buff_pos = 0;
+    }
+
+    f->cache[f->buff_pos] = (char)ch;
+    f->buff_pos += 1;
+    f->logical_file_pos += 1;
+    f->is_dirty = 1;
+    return ch;
 }
 
 ssize_t io300_read(struct io300_file* const f, char* const buff,
@@ -195,15 +296,39 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
 
 int io300_flush(struct io300_file* const f) {
     check_invariants(f);
-    // TODO: Implement this
-    return 0;
+    off_t seek_pos = (off_t)f->buff_start;
+    off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+    if(pos == -1)
+    {
+        return -1;
+    }
+    int n = write(f->fd, f->cache, f->buff_pos);
+    if(n == -1)
+    {
+        return -1;
+    }
+    f->buff_start = f->buff_start + n;
+    f->buff_end = f->buff_start;
+    f->logical_file_pos = f->buff_start;
+    f->buff_pos = 0;
+    f->is_dirty = 0;
+    return n;
 }
 
 int io300_fetch(struct io300_file* const f) {
     check_invariants(f);
-    // TODO: Implement this
     /* This helper should contain the logic for fetching data from the file into the cache. */
     /* Think about how you can use this helper to refactor out some of the logic in your read, write, and seek functions! */
     /* Feel free to add arguments if needed. */
-    return 0;
+    int n = read(f->fd, f->cache, CACHE_SIZE);
+
+    // if we get 0, it means we have reached the EOF and in this case return -1.
+    if(n == -1 || n == 0)
+    {
+        return -1;
+    }
+    f->buff_pos = 0;
+    f->buff_start = f->logical_file_pos;
+    f->buff_end = f->buff_start + n;
+    return n;
 }
