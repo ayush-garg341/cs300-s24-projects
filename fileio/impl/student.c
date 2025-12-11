@@ -57,24 +57,16 @@ struct io300_file {
     /* this will serve as our cache */
     char* cache;
 
-    size_t file_offset;
-    size_t buff_pos;
-    size_t buff_end;
-    size_t cache_start_file_offset;
-    size_t logical_offset;
-    enum ReadDirection direction;
-    enum LastOp last_op;
-    bool write_mode;
-
-    // For adaptive caching
-    size_t last_seek_offset;
-    int confidence;
-    int prefetch_buffer_hit_count; // number of times we hit the prefetch buffer
-    size_t valid_prefetch_bytes;
-    size_t prefetch_offset;
-    char* prefetch_buffer;
-    bool prefetch_buffer_end;
-
+    // TODO: Your properties go here
+    uint buff_start;
+    uint buff_end;
+    uint buff_pos;
+    uint logical_file_pos;
+    unsigned short int  is_dirty;
+    uint original_file_size;
+    unsigned short int is_dir_reverse;
+    unsigned short int backward_seek_count;
+    uint internal_file_offset;
 
     /* Used for debugging, keep track of which io300_file is which */
     char* description;
@@ -96,14 +88,8 @@ static void check_invariants(struct io300_file* f) {
     assert(f->cache != NULL);
     assert(f->fd >= 0);
 
+    // TODO: Add more invariants
     assert(f->buff_pos <= CACHE_SIZE);
-    assert(f->buff_end <= CACHE_SIZE);
-
-    // check for adaptive caching
-    assert(f->direction == FORWARD || f->direction == BACKWARD);
-    assert(f->last_op == READ || f->last_op == WRITE || f->last_op == SEEK);
-    assert(f->valid_prefetch_bytes <= PREFETCH_SIZE * CACHE_SIZE);
-    assert(f->prefetch_offset <= PREFETCH_SIZE * CACHE_SIZE);
 }
 
 /*
@@ -157,36 +143,20 @@ struct io300_file* io300_open(const char* const path, char* description) {
         return NULL;
     }
 
-    ret->prefetch_buffer = malloc(PREFETCH_SIZE * CACHE_SIZE);
-    if(ret->prefetch_buffer == NULL) {
-        fprintf(stderr, "error: could not allocate prefetch cache\n");
-        close(ret->fd);
-        free(ret);
-        return NULL;
-
-    }
-
     ret->description = description;
-
-    ret->file_offset = 0;
-    ret->buff_pos = 0;
+    // TODO: Initialize your file
+    ret->buff_start = 0;
     ret->buff_end = 0;
-    ret->cache_start_file_offset = 0;
-    ret->write_mode = false;
-
+    ret->buff_pos = 0;
+    ret->is_dirty = 0;
+    ret->logical_file_pos = 0;
+    ret->original_file_size = io300_filesize(ret);
+    ret->is_dir_reverse = 0;
+    ret->backward_seek_count = 0;
     ret->stats.read_calls = 0;
     ret->stats.write_calls = 0;
     ret->stats.seeks = 0;
-
-    // for adaptive caching
-    ret->last_seek_offset = 0;
-    ret->confidence = 0;
-    ret->direction = FORWARD;
-    ret->last_op = READ;
-    ret->prefetch_buffer_hit_count = 0;
-    ret->valid_prefetch_bytes = 0;
-    ret->prefetch_offset = 0;
-    ret->prefetch_buffer_end = false;
+    ret->internal_file_offset = 0;
 
     check_invariants(ret);
     dbg(ret, "Just finished initializing file from path: %s\n", path);
@@ -196,96 +166,71 @@ struct io300_file* io300_open(const char* const path, char* description) {
 int io300_seek(struct io300_file* const f, off_t const pos) {
     check_invariants(f);
 
-    // If seeking then we might have to do cache invalidation as seek pos might not be in cache range...
-    if(f->write_mode)
+    if(pos < f->logical_file_pos)
     {
-        // Flush the cache as it is dirty...
-        if(io300_flush(f) == -1)
-            return -1;
-
-        f->write_mode = false;
-    }
-    else {
-        // seek pos is outside of current cache range.
-        if((size_t)pos < f->cache_start_file_offset || (size_t)pos >= (f->cache_start_file_offset + f->buff_end))
+        f->backward_seek_count += 1;
+        if(f->backward_seek_count > 5)
         {
-            // Invalidate it..
-            f->buff_end = 0;
-            f->buff_pos = 0;
-
-            // Invalidate the prefetch buffer as well.
-            f->valid_prefetch_bytes = 0;
-            f->prefetch_offset = 0;
-            f->confidence = 0;
+            f->is_dir_reverse = 1;
         }
-        else {
-            // when we seek inside valid cache range, we have to move buff pos as well.
-            if(f->direction == BACKWARD)
-            {
-                f->buff_pos = CACHE_SIZE - ( pos + (CACHE_SIZE - f->buff_end ) - f->cache_start_file_offset ) - 1;
-            }
-            else {
-                f->buff_pos = pos - f->cache_start_file_offset;
-            }
-            return 0;
-        }
-    }
-
-    enum ReadDirection prev_direction = f->direction;
-
-    if(f->last_seek_offset == 0 && pos == io300_filesize(f) - 1)
-    {
-        // It means we have jumped to the end
-        f->direction = BACKWARD;
     }
     else {
-        // Check the direction
-        f->direction = pos >= 0 && (unsigned long)pos >= f->last_seek_offset ? FORWARD : BACKWARD;
+        f->backward_seek_count = 0;
+        f->is_dir_reverse = 0;
     }
 
-    // Reset confidence to 0
-    if(prev_direction != f->direction)
+    // If offset pos is out of valid cache range
+    if(pos < f->buff_start || pos >= f->buff_end)
     {
-        f->confidence = 0;
+        // if dirty, flush it
+        if(f->is_dirty == 1)
+        {
+            int n = io300_flush(f);
+            if(n == -1)
+            {
+                return -1;
+            }
 
-        // Invalidate it..
-        f->buff_end = 0;
+        }
+        // Invalidate the cache
+        f->buff_start = pos;
+        f->buff_end = pos;
         f->buff_pos = 0;
-
-        // Invalidate the prefetch buffer as well.
-        f->valid_prefetch_bytes = 0;
-        f->prefetch_offset = 0;
+        f->logical_file_pos = pos;
+    }
+    else {
+        f->buff_pos = pos - f->buff_start;
+        f->logical_file_pos = pos;
     }
 
-    // Update the last_seek_offset to current pos
-    f->last_seek_offset = pos;
-    f->file_offset = pos;
-    f->cache_start_file_offset = pos;
-    f->logical_offset = pos;
-    f->last_op = SEEK;
-
-    f->stats.seeks++;
+    if((pos == f->original_file_size - 1 || pos == f->original_file_size) && (f->stats.seeks == 1))
+    {
+        f->is_dir_reverse = 1;
+    }
+    f->internal_file_offset = pos;
     return lseek(f->fd, pos, SEEK_SET);
 }
 
 int io300_close(struct io300_file* const f) {
     check_invariants(f);
 
-    // Flush the cache if it's dirty
-    if(f->write_mode == true)
-    {
-        if(io300_flush(f) == -1)
-            return -1;
-    }
-
 #if (DEBUG_STATISTICS == 1)
-    printf("stats: {desc: %s, read_calls: %d, write_calls: %d, seeks: %d, prefetch_buffer_hit: %d}\n",
+    printf("stats: {desc: %s, read_calls: %d, write_calls: %d, seeks: %d}\n",
            f->description, f->stats.read_calls, f->stats.write_calls,
-           f->stats.seeks, f->prefetch_buffer_hit_count);
+           f->stats.seeks);
 #endif
+
+    if(f->is_dirty == 1)
+    {
+        int n = io300_flush(f);
+        if(n == -1)
+        {
+            return -1;
+        }
+
+    }
     close(f->fd);
     free(f->cache);
-    free(f->prefetch_buffer);
     free(f);
     return 0;
 }
@@ -304,139 +249,92 @@ off_t io300_filesize(struct io300_file* const f) {
 int io300_readc(struct io300_file* const f) {
     check_invariants(f);
 
-    if(f->write_mode == true && f->buff_pos >= f->buff_end)
-    {
-        // Flush the cache
-        if(io300_flush(f) == -1)
-            return -1;
-
-        f->write_mode = false;
-    }
-
-
-    // If we do not have valid prefetch cache
-    if(f->valid_prefetch_bytes == 0 && f->confidence >= CONFIDENCE_THRESHOLD && f->prefetch_buffer_end == false)
-    {
-        // Populate from disk..
-
-        int bytes_read;
-        // Direction is forward
-        if(f->direction == FORWARD)
-        {
-
-            bytes_read = io300_adaptive_fetch(f);
-            if(bytes_read == -1)
-            {
-                return -1;
-            }
-            if(bytes_read == 0)
-            {
-                f->prefetch_buffer_end = true;
-            }
-
-        }
-
-        // Direction is backward
-        if(f->direction == BACKWARD)
-        {
-            bytes_read = 0;
-        }
-
-        f->valid_prefetch_bytes = bytes_read;
-    }
-
-    // Buffer is empty or full
-    if(f->buff_end == 0 || (f->buff_pos >= f->buff_end))
+    if(f->is_dirty == 1)
     {
 
-        // Check if already prefetched the memory..
-        if(f->valid_prefetch_bytes > 0)
+        // When you first start writing into cache, not read, in that case, buff_start = buff_end
+        // When buffer is fully consumed either by reading or writing or both i.e buff_pos = CACHE_SIZE
+        if(f->buff_start == f->buff_end || f->buff_pos == CACHE_SIZE)
         {
-            f->prefetch_buffer_hit_count += 1;
-            size_t remaining = f->valid_prefetch_bytes - f->prefetch_offset;
-            size_t copy_size = remaining >= CACHE_SIZE ? CACHE_SIZE: remaining;
-            memcpy(f->cache, f->prefetch_buffer + f->prefetch_offset, copy_size);
-            f->prefetch_offset += copy_size;
-
-            if(f->prefetch_offset >= f->valid_prefetch_bytes)
-            {
-                // Case when buffer is fully consumed..
-                f->valid_prefetch_bytes = 0;
-                f->prefetch_offset = 0;
-            }
-
-            // Change the buff pos, buff end, cache start file offset and file offset.
-            f->buff_pos = 0;
-            f->buff_end = copy_size;
-            f->cache_start_file_offset = f->file_offset;
-            f->file_offset += copy_size;
-            if(lseek(f->fd, f->file_offset, SEEK_SET) == -1)
-                return -1;
-
-        }
-        else {
-            int bytes_read = io300_fetch(f);
-            if(bytes_read == -1 || bytes_read == 0)
+            // flush the cache
+            int n = io300_flush(f);
+            if(n == -1)
             {
                 return -1;
             }
         }
     }
 
-    f->confidence += 1;
-    f->last_op = READ;
-    if(f->direction == BACKWARD)
+    // when cache is either empty or cache is fully consumed i.e buff_pos = 0 or buff_pos = CACHE_SIZE
+    if(f->is_dir_reverse == 1)
     {
-        size_t buff_pos = CACHE_SIZE - (f->buff_pos + (CACHE_SIZE - f->buff_end) + 1);
-        unsigned char ch = f->cache[buff_pos];
-        f->buff_pos++;
-        f->logical_offset -= 1;
-        return ch;
+        if(f->logical_file_pos < f->buff_start || f->buff_start == f->buff_end)
+        {
+            int n = io300_fetch(f);
+            if(n == -1 || n == 0)
+            {
+                return n;
+            }
+
+        }
     }
     else {
-        f->logical_offset += 1;
-        return (unsigned char)f->cache[f->buff_pos++];
-    }
-}
 
+        if(f->buff_pos % CACHE_SIZE == 0)
+        {
+            // fetch the cache from disk
+            int n = io300_fetch(f);
+            if(n == -1 || n == 0)
+            {
+                return n;
+            }
+        }
+    }
+
+    // Case: cache is not full, have fewer bytes and we keep reading from cache while the cache is not valid at current position.
+    if(f->logical_file_pos >= f->buff_end)
+    {
+        return -1;
+    }
+
+    if(f->is_dir_reverse == 1)
+    {
+        unsigned char c = (unsigned char)f->cache[f->buff_pos];
+        return c;
+    }
+
+    unsigned char c = (unsigned char)f->cache[f->buff_pos++];
+    f->logical_file_pos += 1;
+    return c;
+}
 
 int io300_writec(struct io300_file* f, int ch) {
     check_invariants(f);
-    char const c = (char)ch;
-    if(f->write_mode == false && f->buff_pos == CACHE_SIZE)
+
+    // When cache is fully consumed either by reading or writing
+    if(f->buff_pos == CACHE_SIZE)
     {
-        // Switching from reading to writing and cache is fully read..., change the position of cache start file offset.
-        f->buff_pos = 0;
-        f->buff_end = 0;
-        f->cache_start_file_offset += CACHE_SIZE;
+        if(f->is_dirty == 1)
+        {
+            // flush the cache, cache is dirty
+            int n = io300_flush(f);
+            if(n == -1)
+            {
+                return -1;
+            }
+        }
+        else {
 
-        // Flush the prefetch cache, it is staled at this point.
-        f->valid_prefetch_bytes = 0;
-        f->confidence = 0;
-        f->prefetch_offset = 0;
+            // when cache is fully consumed and not dirty, invalidate the cache
+            f->buff_start = f->logical_file_pos;
+            f->buff_end = f->logical_file_pos;
+            f->buff_pos = 0;
+        }
     }
 
-    if(f->write_mode == true && f->buff_pos == CACHE_SIZE)
-    {
-        // We are writing and cache is full
-        if(io300_flush(f) == -1)
-            return -1;
-    }
-
-    if(f->direction == BACKWARD)
-    {
-        size_t buff_pos = CACHE_SIZE - (f->buff_pos + 1);
-        f->cache[buff_pos] = c;
-        f->buff_pos += 1;
-        f->logical_offset -= 1;
-    }
-    else {
-        f->cache[f->buff_pos++] = c;
-        f->logical_offset += 1;
-    }
-
-    f->write_mode = true;
-    f->last_op = WRITE;
+    f->cache[f->buff_pos++] = (char)ch;
+    f->logical_file_pos += 1;
+    f->is_dirty = 1;
     return ch;
 }
 
@@ -444,296 +342,204 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
                    size_t const sz) {
     check_invariants(f);
 
-    if(f->write_mode == true)
+    uint valid_last_byte_index = f->buff_end > f->buff_start ? f->buff_end - f->buff_start: 0;
+    // meaning number of bytes read successfully
+
+    // Checking bytes that are in the valid cache
+    uint valid_bytes_cache = valid_last_byte_index > f->buff_pos ? valid_last_byte_index - f->buff_pos : 0;
+    if(sz > valid_bytes_cache)
     {
-        int flushed = io300_flush(f);
-        if(flushed == -1)
+        // Cache is dirty
+        if(f->is_dirty)
         {
-            return -1;
-        }
-        f->write_mode = false;
-    }
-
-    size_t valid_cache_left = (f->buff_end > f->buff_pos) ? f->buff_end - f->buff_pos : f->valid_prefetch_bytes - f->prefetch_offset;
-
-    if(f->valid_prefetch_bytes == 0 && f->confidence >= CONFIDENCE_THRESHOLD && f->prefetch_buffer_end == false)
-    {
-        // Populate from disk..
-
-        int bytes_read;
-        // Direction is forward
-        if(f->direction == FORWARD)
-        {
-
-            bytes_read = io300_adaptive_fetch(f);
-            if(bytes_read == -1)
+            // flush the cache
+            int n = io300_flush(f);
+            if(n == -1)
             {
                 return -1;
             }
-            if(bytes_read == 0)
-            {
-                f->prefetch_buffer_end = true;
+
+        }
+
+        // Reading more than or equal to cache size.
+        if(sz >= CACHE_SIZE)
+        {
+            // Change the kernel file pointer to correct offset.
+            off_t seek_pos = (off_t)f->logical_file_pos;
+            if(f->internal_file_offset != seek_pos) {
+                off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+                if(pos == -1)
+                {
+                    return -1;
+                }
+                f->internal_file_offset = pos;
             }
-
-        }
-
-        // Direction is backward
-        if(f->direction == BACKWARD)
-        {
-            bytes_read = 0;
-        }
-
-        f->valid_prefetch_bytes = bytes_read;
-    }
-
-    // We can have an edge case, where we first filled cache but read fewer bytes and then reading again more bytes, we might have to shift our file offset in order to make it work correctly.
-
-    if(sz > valid_cache_left && sz < CACHE_SIZE)
-    {
-        // Reset the internal file offset.
-        off_t seek_pos = f->cache_start_file_offset + f->buff_pos;
-        if(f->file_offset != (size_t)seek_pos)
-        {
-            f->stats.seeks++;
-            int reset = lseek(f->fd, seek_pos, SEEK_SET);
-            if(reset == -1)
-                return -1;
-
-            f->file_offset = reset;
-            f->cache_start_file_offset = reset;
-        }
-
-        // Invalidate it
-        f->buff_pos = 0;
-        f->buff_end = 0;
-
-        // Invalidate prefetch buffer
-        f->valid_prefetch_bytes = 0;
-        f->prefetch_offset = 0;
-        f->confidence = 0;
-
-    }
-    else if(sz > CACHE_SIZE)     // sz is greater than cache size
-    {
-        // Reset the internal file offset.
-        off_t seek_pos = f->cache_start_file_offset + f->buff_pos;
-        if(f->file_offset != (size_t)seek_pos) {
-            f->stats.seeks++;
-            int reset = lseek(f->fd, seek_pos, SEEK_SET);
-            if(reset == -1)
-                return -1;
-
-            f->file_offset = reset;
-            f->cache_start_file_offset = f->file_offset;
-        }
-
-        // Invalid cache
-        f->buff_pos = 0;
-        f->buff_end = 0;
-
-        // Invalidate prefetch buffer
-        f->valid_prefetch_bytes = 0;
-        f->prefetch_offset = 0;
-        f->confidence = 0;
-
-        // return from file directly, changing file offset
-        f->stats.read_calls++;
-        ssize_t bytes_read = read(f->fd, buff, sz);
-        f->file_offset += bytes_read;
-        f->cache_start_file_offset = f->file_offset;
-        return bytes_read;
-    }
-
-    // Identifying that cache is empty or full and need reloading with new data
-    if(f->buff_end == 0 || (f->buff_pos >= f->buff_end))
-    {
-        // Check if already prefetched the memory..
-        if(f->valid_prefetch_bytes > 0)
-        {
-            f->prefetch_buffer_hit_count += 1;
-            size_t remaining = f->valid_prefetch_bytes - f->prefetch_offset;
-            size_t copy_size = remaining >= CACHE_SIZE ? CACHE_SIZE: remaining;
-            memcpy(f->cache, f->prefetch_buffer + f->prefetch_offset, copy_size);
-            f->prefetch_offset += copy_size;
-
-            if(f->prefetch_offset >= f->valid_prefetch_bytes)
+            int n = read(f->fd, buff, sz);
+            if(n == 0 || n == -1)
             {
-                // Case when buffer is fully consumed..
-                f->valid_prefetch_bytes = 0;
-                f->prefetch_offset = 0;
+                return n;
             }
-
-            // Change the buff pos, buff end, cache start file offset and file offset.
+            f->logical_file_pos += n;
+            f->buff_start = f->logical_file_pos;
+            f->buff_end = f->buff_start;
             f->buff_pos = 0;
-            f->buff_end = copy_size;
-            f->cache_start_file_offset = f->file_offset;
-            f->file_offset += copy_size;
-            if(lseek(f->fd, f->file_offset, SEEK_SET) == -1)
-                return -1;
+            f->internal_file_offset = f->logical_file_pos;
+            return n;
         }
         else {
-            if(io300_fetch(f) == -1)
-                return -1;
-        }
+            // First populate the cache and then return from it.
+            // Change the kernel file pointer to correct offset.
+            off_t seek_pos = (off_t)f->logical_file_pos;
+            if(f->internal_file_offset != seek_pos) {
 
+                off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+                if(pos == -1)
+                {
+                    return -1;
+                }
+                f->internal_file_offset = pos;
+            }
+            uint original_pos = f->logical_file_pos;
+            uint boundary_found = 0;
+            if(f->is_dir_reverse == 1 && sz > 1 && (original_pos != f->original_file_size - 1 && original_pos != f->original_file_size))
+            {
+                f->logical_file_pos += sz;
+                boundary_found = 1;
+            }
+
+            int n = io300_fetch(f);
+            if(n == 0 || n == -1)
+            {
+                return 0;
+            }
+
+            if(boundary_found == 1)
+            {
+                f->logical_file_pos = original_pos;
+                f->buff_pos -= sz;
+            }
+
+            valid_last_byte_index = n;
+            // In this case setting this variable to the number of bytes read.
+        }
     }
+
 
     // It might be possible that cache has only 3 valid bytes left with buff end = 3 and buff pos = 0, reading more than 3 bytes will give garbage data, so need to have a check of valid bytes return. It's not always possible to return sz bytes correctly from cache.
     int valid_read = sz;
-    if (sz > f->buff_end - f->buff_pos) {
-        valid_read = f->buff_end - f->buff_pos;
+    if(f->is_dir_reverse == 1)
+    {
+        valid_last_byte_index -= 1;
+        if(f->buff_pos > valid_last_byte_index)
+        {
+            valid_read = 0;
+        }
+        memcpy(buff, &f->cache[f->buff_pos], valid_read);
     }
-
-    memcpy(buff, &f->cache[f->buff_pos], valid_read);
-
-    f->buff_pos += valid_read;
-
-    f->confidence += 1;
-
+    else {
+        if (sz > valid_last_byte_index - f->buff_pos) {
+            valid_read = valid_last_byte_index - f->buff_pos;
+        }
+        memcpy(buff, &f->cache[f->buff_pos], valid_read);
+        f->buff_pos += valid_read;
+        f->logical_file_pos += valid_read;
+    }
     return (ssize_t)valid_read;
 }
-
 
 ssize_t io300_write(struct io300_file* const f, const char* buff,
                     size_t const sz) {
     check_invariants(f);
 
-    if(f->write_mode == false)
+    // Checking bytes that are in the valid cache
+    uint valid_bytes_cache = CACHE_SIZE - f->buff_pos;
+    if(sz > valid_bytes_cache)
     {
-        if(f->buff_pos == CACHE_SIZE)
+        // Cache is dirty
+        if(f->is_dirty)
         {
-            f->cache_start_file_offset += CACHE_SIZE;
-            f->buff_pos = 0;
-            f->buff_end = 0;
-
-            // Invalidating the prefetch buffer, it will be stale.
-            f->valid_prefetch_bytes = 0;
-            f->confidence = 0;
-            f->prefetch_offset = 0;
-        }
-
-        size_t valid_cache_left = (f->buff_end > f->buff_pos) ? f->buff_end - f->buff_pos : CACHE_SIZE - f->buff_pos;
-        if(sz <= valid_cache_left)
-        {
-            // write into cache
-            memcpy(&f->cache[f->buff_pos], buff, sz);
-            f->buff_pos += sz;
-            f->write_mode = true;
-            return (ssize_t)sz;
-        }
-        else {
-            // Seek to correct position
-            off_t seek_pos = f->cache_start_file_offset + f->buff_pos;
-            if(f->file_offset != (size_t)seek_pos)
+            // flush the cache
+            int n = io300_flush(f);
+            if(n == -1)
             {
-                f->stats.seeks++;
-                int reset = lseek(f->fd, seek_pos, SEEK_SET);
-                if(reset == -1)
-                    return -1;
-
-                f->file_offset = reset;
-                f->cache_start_file_offset = f->file_offset;
-            }
-
-            // Invalidate it
-            f->buff_pos = 0;
-            f->buff_end = 0;
-
-            // Invalidating the prefetch buffer, it will be stale.
-            f->valid_prefetch_bytes = 0;
-            f->confidence = 0;
-            f->prefetch_offset = 0;
-
-
-            // Write into file directly
-            f->stats.write_calls++;
-            ssize_t bytes_written = write(f->fd, buff, sz);
-            f->file_offset += bytes_written;
-            f->cache_start_file_offset = f->file_offset;
-            return (ssize_t)sz;
-        }
-    }
-    else { // Cache is dirty
-
-        if(f->buff_pos == CACHE_SIZE) // Cache is full
-        {
-            if(io300_flush(f) == -1)
                 return -1;
-
-            f->write_mode = false;
-        }
-
-        size_t valid_cache_left = (f->buff_end > f->buff_pos) ? f->buff_end - f->buff_pos : CACHE_SIZE - f->buff_pos;
-
-        if(sz <= valid_cache_left)
-        {
-            memcpy(&f->cache[f->buff_pos], buff, sz);
-            f->buff_pos += sz;
-            f->write_mode = true;
-            return (ssize_t)sz;
-        }
-        else {
-
-            if(f->write_mode)
-            {
-                if(io300_flush(f) == -1)
-                    return -1;
-
-                f->write_mode = false;
             }
 
-            // Write into file directly
-            f->stats.write_calls++;
-            ssize_t bytes_written = write(f->fd, buff, sz);
-            f->file_offset += bytes_written;
-            f->cache_start_file_offset = f->file_offset;
-            return (ssize_t)sz;
+        }
+
+        if(sz >= CACHE_SIZE)
+        {
+            // Write directly into a file and invalidate the cache by seeking to correct pos
+            off_t seek_pos = (off_t)f->logical_file_pos;
+            if(f->internal_file_offset != seek_pos) {
+                off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+                if(pos == -1)
+                {
+                    return -1;
+                }
+                f->internal_file_offset = pos;
+            }
+            int n = write(f->fd, buff, sz);
+            if(n == 0 || n == -1)
+            {
+                return n;
+            }
+            f->buff_pos = 0;
+            f->logical_file_pos += n;
+            f->buff_start = f->logical_file_pos;
+            f->buff_end = f->buff_start;
+            f->internal_file_offset = f->logical_file_pos;
+            return n;
+        }
+        else {
+            // Write into cache by seeking into correct position
+            off_t seek_pos = (off_t)f->logical_file_pos;
+            if(f->internal_file_offset != seek_pos) {
+                off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+                if(pos == -1)
+                {
+                    return -1;
+                }
+                f->internal_file_offset = pos;
+            }
+            f->buff_pos = 0;
+            f->buff_start = f->logical_file_pos;
+            f->buff_end = f->buff_start;
         }
     }
+
+    memcpy(&f->cache[f->buff_pos], buff, sz);
+    f->buff_pos += sz;
+    f->logical_file_pos += sz;
+    f->is_dirty = 1;
+
+    return (ssize_t)sz;
 }
 
 int io300_flush(struct io300_file* const f) {
     check_invariants(f);
-
-    // Flush the cache in a file
-    // Increment the user maintained file offset by those dirty characters, it should be matching with internal file offset maintained by kernel.
-
-    // We are flushing the entire cache, not partial
-    size_t dirty_chars = f->buff_pos - 0;
-    size_t start_dirty = 0;
-
-    // // Find seek position
-    off_t seek_pos = f->cache_start_file_offset + start_dirty;
-    if(f->file_offset != (size_t)seek_pos)
-    {
-        f->stats.seeks++;
-        int res = lseek(f->fd, seek_pos, SEEK_SET);
-        if(res == -1)
+    off_t seek_pos = (off_t)f->buff_start;
+    off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+    if(f->internal_file_offset != seek_pos) {
+        if(pos == -1)
+        {
             return -1;
-
-        f->file_offset = res;
+        }
+        f->internal_file_offset = pos;
     }
-
-    f->stats.write_calls += 1;
-    ssize_t bytes_written = write(f->fd, &f->cache[start_dirty], dirty_chars);
-    if(bytes_written == -1)
+    int n = write(f->fd, f->cache, f->buff_pos);
+    if(n == -1)
+    {
         return -1;
-
-    if(bytes_written > 0 && (size_t)bytes_written != dirty_chars)
-        return -1;
-
-    f->file_offset += bytes_written;
+    }
+    f->buff_start = f->buff_start + n;
+    f->buff_end = f->buff_start;
+    f->logical_file_pos = f->buff_start;
     f->buff_pos = 0;
-    f->buff_end = 0;
-    f->cache_start_file_offset = f->file_offset;
-
-    // When we flush the cache, there is no point in maintaining the prefetch buffer.
-    // Because it is possible that we have changed the offset and hence prefetch buffer is not valid.
-    f->valid_prefetch_bytes = 0;
-    f->confidence = 0;
-    f->prefetch_offset = 0;
-
-    return bytes_written;
+    f->is_dirty = 0;
+    f->internal_file_offset = f->logical_file_pos;
+    f->original_file_size = io300_filesize(f);
+    return n;
 }
 
 int io300_fetch(struct io300_file* const f) {
@@ -742,63 +548,43 @@ int io300_fetch(struct io300_file* const f) {
     /* Think about how you can use this helper to refactor out some of the logic in your read, write, and seek functions! */
     /* Feel free to add arguments if needed. */
 
-    f->stats.read_calls += 1;
-    ssize_t bytes_read;
-    if(f->direction == BACKWARD)
+    if(f->is_dir_reverse == 1)
     {
-        size_t bytes_to_seek =  CACHE_SIZE;
-        size_t old_offset = f->file_offset;
-        size_t bytes_to_read = CACHE_SIZE;
-
-        // Reading in reverse direction ...
-        size_t seek_offset;
-        if (old_offset + 1 >= bytes_to_seek) {
-            seek_offset = old_offset + 1 - bytes_to_seek; // valid seek
-            bytes_to_read = CACHE_SIZE;
-        } else {
-            seek_offset = 0; // Clamp to start of file
-            bytes_to_read = old_offset > 0 ? old_offset + 1: 0;
+        // It means we are at the end of the file and caching in forward direction does not make sense.
+        int valid_chars_left = f->logical_file_pos >= CACHE_SIZE ? CACHE_SIZE : f->logical_file_pos + 1;
+        off_t seek_pos = f->logical_file_pos >= CACHE_SIZE ? f->logical_file_pos - CACHE_SIZE + 1: 0;
+        if(f->internal_file_offset != seek_pos) {
+            off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+            if(pos == -1)
+            {
+                return -1;
+            }
+            f->internal_file_offset = pos;
         }
 
-        // seek to the previous offset
-        if(lseek(f->fd, seek_offset, SEEK_SET) == -1)
+        int n = read(f->fd, f->cache, valid_chars_left);
+        if(n == -1 || n == 0)
+        {
             return -1;
-
-        bytes_read = read(f->fd, f->cache, bytes_to_read);
-
-        if(lseek(f->fd, seek_offset, SEEK_SET) == -1)
-            return -1;
-
-        f->file_offset = seek_offset;
-        f->cache_start_file_offset = f->file_offset;
-
-    }
-    else {
-        bytes_read = read(f->fd, f->cache, CACHE_SIZE);
-        f->cache_start_file_offset = f->file_offset;
-        f->file_offset += bytes_read;
+        }
+        // if we get 0, it means we have reached the EOF and in this case return -1.
+        f->buff_start = seek_pos;
+        f->buff_end = f->buff_start + n;
+        f->buff_pos = f->logical_file_pos - f->buff_start;
+        f->internal_file_offset = f->buff_end;
+        return n;
     }
 
-    if(bytes_read == -1)
+    int n = read(f->fd, f->cache, CACHE_SIZE);
+
+    // if we get 0, it means we have reached the EOF and in this case return -1.
+    if(n == -1 || n == 0)
+    {
         return -1;
-
+    }
     f->buff_pos = 0;
-    f->buff_end = bytes_read;
-    return bytes_read;
-}
-
-int io300_adaptive_fetch(struct io300_file* f)
-{
-    check_invariants(f);
-
-    f->stats.read_calls += 1;
-    size_t old_offset = f->file_offset;
-    ssize_t bytes_read = read(f->fd, f->prefetch_buffer, PREFETCH_SIZE*CACHE_SIZE);
-    if(bytes_read == -1 || bytes_read == 0)
-        return bytes_read;
-
-    if(lseek(f->fd, old_offset, SEEK_SET) == -1)
-        return -1;
-
-    return bytes_read;
+    f->buff_start = f->logical_file_pos;
+    f->buff_end = f->buff_start + n;
+    f->internal_file_offset = f->buff_end;
+    return n;
 }
