@@ -284,14 +284,175 @@ int io300_writec(struct io300_file* f, int ch) {
 ssize_t io300_read(struct io300_file* const f, char* const buff,
                    size_t const sz) {
     check_invariants(f);
-    // TODO: Implement this
-    return read(f->fd, buff, sz);
+
+    // When you first start writing into cache, not read
+    if(f->buff_start == f->buff_end && f->is_dirty == 1)
+    {
+        // flush the cache
+        int n = io300_flush(f);
+        if(n == -1)
+        {
+            return -1;
+        }
+    }
+    else if(f->buff_pos == CACHE_SIZE && f->is_dirty == 1)
+    {
+        // Cache is full and dirty
+        // flush the cache
+        int n = io300_flush(f);
+        if(n == -1)
+        {
+            return -1;
+        }
+    }
+
+    uint valid_last_byte_index = f->buff_end > f->buff_start ? f->buff_end - f->buff_start: 0;
+    // meaning number of bytes read successfully
+
+    // Checking bytes that are in the valid cache
+    uint valid_bytes_cache = valid_last_byte_index > f->buff_pos ? valid_last_byte_index - f->buff_pos : 0;
+    if(sz > valid_bytes_cache)
+    {
+        // Cache is dirty
+        if(f->is_dirty)
+        {
+            // flush the cache
+            int n = io300_flush(f);
+            if(n == -1)
+            {
+                return -1;
+            }
+
+        }
+
+        // Reading more than or equal to cache size.
+        if(sz >= CACHE_SIZE)
+        {
+            // Change the kernel file pointer to correct offset.
+            off_t seek_pos = (off_t)f->logical_file_pos;
+            off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+            if(pos == -1)
+            {
+                return -1;
+            }
+            int n = read(f->fd, buff, sz);
+            if(n == 0 || n == -1)
+            {
+                return n;
+            }
+            f->logical_file_pos += n;
+            f->buff_start = f->logical_file_pos;
+            f->buff_end = 0;
+            f->buff_pos = 0;
+            return n;
+        }
+        else {
+            // First populate the cache and then return from it.
+            // Change the kernel file pointer to correct offset.
+            off_t seek_pos = (off_t)f->logical_file_pos;
+            off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+            if(pos == -1)
+            {
+                return -1;
+            }
+            int n = io300_fetch(f);
+            if(n == 0 || n == -1)
+            {
+                return 0;
+            }
+            valid_last_byte_index = n;
+            // In this case setting this variable to the number of bytes read.
+        }
+    }
+
+
+    // It might be possible that cache has only 3 valid bytes left with buff end = 3 and buff pos = 0, reading more than 3 bytes will give garbage data, so need to have a check of valid bytes return. It's not always possible to return sz bytes correctly from cache.
+    int valid_read = sz;
+    if (sz > valid_last_byte_index - f->buff_pos) {
+        valid_read = valid_last_byte_index - f->buff_pos;
+    }
+    memcpy(buff, &f->cache[f->buff_pos], valid_read);
+    f->buff_pos += valid_read;
+    f->logical_file_pos += valid_read;
+    return (ssize_t)valid_read;
 }
+
 ssize_t io300_write(struct io300_file* const f, const char* buff,
                     size_t const sz) {
     check_invariants(f);
-    // TODO: Implement this
-    return write(f->fd, buff, sz);
+    // when cache is full and dirty
+    if(f->buff_pos == CACHE_SIZE && f->is_dirty == 1)
+    {
+        // flush the cache
+        int n = io300_flush(f);
+        if(n == -1)
+        {
+            return -1;
+        }
+    }
+    else if(f->buff_pos == CACHE_SIZE)
+    {
+        // when cache is fully consumed and not dirty
+
+        f->buff_start = f->logical_file_pos;
+        f->buff_end = f->logical_file_pos;
+        f->buff_pos = 0;
+    }
+
+    // Checking bytes that are in the valid cache
+    uint valid_bytes_cache = CACHE_SIZE > f->buff_pos ? CACHE_SIZE - f->buff_pos : 0;
+    if(sz > valid_bytes_cache)
+    {
+        // Cache is dirty
+        if(f->is_dirty)
+        {
+            // flush the cache
+            int n = io300_flush(f);
+            if(n == -1)
+            {
+                return -1;
+            }
+
+        }
+
+        if(sz >= CACHE_SIZE)
+        {
+            // Write directly into a file and invalidate the cache by seeking to correct pos
+            off_t seek_pos = (off_t)f->logical_file_pos;
+            off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+            if(pos == -1)
+            {
+                return -1;
+            }
+            int n = write(f->fd, buff, sz);
+            if(n == 0 || n == -1)
+            {
+                return n;
+            }
+            f->buff_pos = 0;
+            f->buff_start += n;
+            f->logical_file_pos += n;
+            return n;
+        }
+        else {
+            // Write into cache by seeking into correct position
+            off_t seek_pos = (off_t)f->logical_file_pos;
+            off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+            if(pos == -1)
+            {
+                return -1;
+            }
+            f->buff_pos = 0;
+            f->buff_start = f->logical_file_pos;
+        }
+    }
+
+    memcpy(&f->cache[f->buff_pos], buff, sz);
+    f->buff_pos += sz;
+    f->logical_file_pos += sz;
+    f->is_dirty = 1;
+
+    return (ssize_t)sz;
 }
 
 int io300_flush(struct io300_file* const f) {
