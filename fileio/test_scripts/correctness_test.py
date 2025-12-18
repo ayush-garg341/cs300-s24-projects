@@ -180,7 +180,7 @@ runtests(
         "read_random": create_unit_test("read"),
         "write": create_unit_test("write=17"),
         "write_random": create_unit_test("write"),
-        # "read/write": create_unit_test("read write"),
+        "read/write": create_unit_test("read write"),
         #     'all_read/write' : create_unit_test("readc writec read write"),
     },
     "BASIC FUNCTIONALITY",

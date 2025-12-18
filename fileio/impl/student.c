@@ -400,7 +400,7 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
     }
 
     // Checking bytes that are in the valid cache
-    uint valid_bytes_cache = CACHE_SIZE > f->buff_pos ? CACHE_SIZE - f->buff_pos : 0;
+    uint valid_bytes_cache = CACHE_SIZE - f->buff_pos;
     if(sz > valid_bytes_cache)
     {
         // Cache is dirty
@@ -430,8 +430,9 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
                 return n;
             }
             f->buff_pos = 0;
-            f->buff_start += n;
             f->logical_file_pos += n;
+            f->buff_start = f->logical_file_pos;
+            f->buff_end = f->buff_start;
             return n;
         }
         else {
@@ -444,6 +445,7 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
             }
             f->buff_pos = 0;
             f->buff_start = f->logical_file_pos;
+            f->buff_end = f->buff_start;
         }
     }
 
