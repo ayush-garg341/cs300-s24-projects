@@ -342,7 +342,7 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
             }
             f->logical_file_pos += n;
             f->buff_start = f->logical_file_pos;
-            f->buff_end = 0;
+            f->buff_end = f->buff_start;
             f->buff_pos = 0;
             return n;
         }

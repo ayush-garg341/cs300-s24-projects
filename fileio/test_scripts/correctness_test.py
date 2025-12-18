@@ -181,7 +181,7 @@ runtests(
         "write": create_unit_test("write=17"),
         "write_random": create_unit_test("write"),
         "read/write": create_unit_test("read write"),
-        #     'all_read/write' : create_unit_test("readc writec read write"),
+        "all_read/write": create_unit_test("readc writec read write"),
     },
     "BASIC FUNCTIONALITY",
 )
@@ -189,21 +189,21 @@ runtests(
 log("\n======= (2) END-TO-END TESTS =======")
 runtests(
     {
-        # 'all_interaction' : create_unit_test("all"),
+        "all_interaction": create_unit_test("all"),
         "byte_cat": byte_cat,
         "diabolical_byte_cat": diabolical_byte_cat,
         "reverse_byte_cat": reverse_byte_cat,
-        # 'block_cat_1': create_block_cat(1),
-        # 'block_cat_17': create_block_cat(17),
-        # 'block_cat_334': create_block_cat(334),
-        # 'block_cat_huge': create_block_cat(8192),
-        # 'block_cat_gargantuan': create_block_cat(32768),
-        # 'reverse_block_cat_1': create_reverse_block_cat(1),
-        # 'reverse_block_cat_13': create_reverse_block_cat(13),
-        # 'reverse_block_cat_987': create_reverse_block_cat(987),
-        # 'reverse_block_cat_huge': create_reverse_block_cat(8192),
-        # 'random_block_cat': random_block_cat,
-        # 'rot13': rot13
+        "block_cat_1": create_block_cat(1),
+        "block_cat_17": create_block_cat(17),
+        "block_cat_334": create_block_cat(334),
+        "block_cat_huge": create_block_cat(8192),
+        "block_cat_gargantuan": create_block_cat(32768),
+        "reverse_block_cat_1": create_reverse_block_cat(1),
+        "reverse_block_cat_13": create_reverse_block_cat(13),
+        "reverse_block_cat_987": create_reverse_block_cat(987),
+        "reverse_block_cat_huge": create_reverse_block_cat(8192),
+        "random_block_cat": random_block_cat,
+        "rot13": rot13,
     },
     "END-TO-END",
 )
