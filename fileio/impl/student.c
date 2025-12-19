@@ -208,29 +208,24 @@ off_t io300_filesize(struct io300_file* const f) {
 int io300_readc(struct io300_file* const f) {
     check_invariants(f);
 
-    // When you first start writing into cache, not read
-    if(f->buff_start == f->buff_end && f->is_dirty == 1)
+    if(f->is_dirty == 1)
     {
-        // flush the cache
-        int n = io300_flush(f);
-        if(n == -1)
+
+        // When you first start writing into cache, not read, in that case, buff_start = buff_end
+        // When buffer is fully consumed either by reading or writing or both i.e buff_pos = CACHE_SIZE
+        if(f->buff_start == f->buff_end || f->buff_pos == CACHE_SIZE)
         {
-            return -1;
-        }
-    }
-    else if(f->buff_pos == CACHE_SIZE && f->is_dirty == 1)
-    {
-        // Cache is full and dirty
-        // flush the cache
-        int n = io300_flush(f);
-        if(n == -1)
-        {
-            return -1;
+            // flush the cache
+            int n = io300_flush(f);
+            if(n == -1)
+            {
+                return -1;
+            }
         }
     }
 
-    // when cache is either empty or cache is fully consumed
-    if(f->buff_pos == 0 || f->buff_pos == CACHE_SIZE)
+    // when cache is either empty or cache is fully consumed i.e buff_pos = 0 or buff_pos = CACHE_SIZE
+    if(f->buff_pos % CACHE_SIZE == 0)
     {
         // fetch the cache from disk
         int n = io300_fetch(f);
@@ -246,8 +241,7 @@ int io300_readc(struct io300_file* const f) {
         return -1;
     }
 
-    unsigned char c = (unsigned char)f->cache[f->buff_pos];
-    f->buff_pos += 1;
+    unsigned char c = (unsigned char)f->cache[f->buff_pos++];
     f->logical_file_pos += 1;
     return c;
 }
@@ -255,27 +249,28 @@ int io300_readc(struct io300_file* const f) {
 int io300_writec(struct io300_file* f, int ch) {
     check_invariants(f);
 
-    // when cache is full and dirty
-    if(f->buff_pos == CACHE_SIZE && f->is_dirty == 1)
+    // When cache is fully consumed either by reading or writing
+    if(f->buff_pos == CACHE_SIZE)
     {
-        // flush the cache
-        int n = io300_flush(f);
-        if(n == -1)
+        if(f->is_dirty == 1)
         {
-            return -1;
+            // flush the cache, cache is dirty
+            int n = io300_flush(f);
+            if(n == -1)
+            {
+                return -1;
+            }
+        }
+        else {
+
+            // when cache is fully consumed and not dirty, invalidate the cache
+            f->buff_start = f->logical_file_pos;
+            f->buff_end = f->logical_file_pos;
+            f->buff_pos = 0;
         }
     }
-    else if(f->buff_pos == CACHE_SIZE)
-    {
-        // when cache is fully consumed and not dirty
 
-        f->buff_start = f->logical_file_pos;
-        f->buff_end = f->logical_file_pos;
-        f->buff_pos = 0;
-    }
-
-    f->cache[f->buff_pos] = (char)ch;
-    f->buff_pos += 1;
+    f->cache[f->buff_pos++] = (char)ch;
     f->logical_file_pos += 1;
     f->is_dirty = 1;
     return ch;
@@ -284,27 +279,6 @@ int io300_writec(struct io300_file* f, int ch) {
 ssize_t io300_read(struct io300_file* const f, char* const buff,
                    size_t const sz) {
     check_invariants(f);
-
-    // When you first start writing into cache, not read
-    if(f->buff_start == f->buff_end && f->is_dirty == 1)
-    {
-        // flush the cache
-        int n = io300_flush(f);
-        if(n == -1)
-        {
-            return -1;
-        }
-    }
-    else if(f->buff_pos == CACHE_SIZE && f->is_dirty == 1)
-    {
-        // Cache is full and dirty
-        // flush the cache
-        int n = io300_flush(f);
-        if(n == -1)
-        {
-            return -1;
-        }
-    }
 
     uint valid_last_byte_index = f->buff_end > f->buff_start ? f->buff_end - f->buff_start: 0;
     // meaning number of bytes read successfully
@@ -380,24 +354,6 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
 ssize_t io300_write(struct io300_file* const f, const char* buff,
                     size_t const sz) {
     check_invariants(f);
-    // when cache is full and dirty
-    if(f->buff_pos == CACHE_SIZE && f->is_dirty == 1)
-    {
-        // flush the cache
-        int n = io300_flush(f);
-        if(n == -1)
-        {
-            return -1;
-        }
-    }
-    else if(f->buff_pos == CACHE_SIZE)
-    {
-        // when cache is fully consumed and not dirty
-
-        f->buff_start = f->logical_file_pos;
-        f->buff_end = f->logical_file_pos;
-        f->buff_pos = 0;
-    }
 
     // Checking bytes that are in the valid cache
     uint valid_bytes_cache = CACHE_SIZE - f->buff_pos;
