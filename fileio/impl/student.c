@@ -52,6 +52,9 @@ struct io300_file {
     uint buff_pos;
     uint logical_file_pos;
     unsigned short int  is_dirty;
+    uint original_file_size;
+    unsigned short int is_dir_reverse;
+    unsigned short int backward_seek_count;
 
     /* Used for debugging, keep track of which io300_file is which */
     char* description;
@@ -134,6 +137,12 @@ struct io300_file* io300_open(const char* const path, char* description) {
     ret->buff_pos = 0;
     ret->is_dirty = 0;
     ret->logical_file_pos = 0;
+    ret->original_file_size = io300_filesize(ret);
+    ret->is_dir_reverse = 0;
+    ret->backward_seek_count = 0;
+    ret->stats.read_calls = 0;
+    ret->stats.write_calls = 0;
+    ret->stats.seeks = 0;
 
     check_invariants(ret);
     dbg(ret, "Just finished initializing file from path: %s\n", path);
@@ -143,6 +152,19 @@ struct io300_file* io300_open(const char* const path, char* description) {
 int io300_seek(struct io300_file* const f, off_t const pos) {
     check_invariants(f);
     f->stats.seeks++;
+
+    if(pos < f->logical_file_pos)
+    {
+        f->backward_seek_count += 1;
+        if(f->backward_seek_count > 5)
+        {
+            f->is_dir_reverse = 1;
+        }
+    }
+    else {
+        f->backward_seek_count = 0;
+        f->is_dir_reverse = 0;
+    }
 
     // If offset pos is out of valid cache range
     if(pos < f->buff_start || pos >= f->buff_end)
@@ -164,8 +186,13 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
         f->logical_file_pos = pos;
     }
     else {
-        f->buff_pos = pos - f->buff_start;
+        f->buff_pos = pos < f->buff_start ? 0 : pos - f->buff_start;
         f->logical_file_pos = pos;
+    }
+
+    if((pos == f->original_file_size - 1 || pos == f->original_file_size) && (f->stats.seeks == 1))
+    {
+        f->is_dir_reverse = 1;
     }
     return lseek(f->fd, pos, SEEK_SET);
 }
@@ -225,13 +252,28 @@ int io300_readc(struct io300_file* const f) {
     }
 
     // when cache is either empty or cache is fully consumed i.e buff_pos = 0 or buff_pos = CACHE_SIZE
-    if(f->buff_pos % CACHE_SIZE == 0)
+    if(f->is_dir_reverse == 1)
     {
-        // fetch the cache from disk
-        int n = io300_fetch(f);
-        if(n == -1 || n == 0)
+        if(f->logical_file_pos < f->buff_start || f->buff_start == f->buff_end)
         {
-            return n;
+            int n = io300_fetch(f);
+            if(n == -1 || n == 0)
+            {
+                return n;
+            }
+
+        }
+    }
+    else {
+
+        if(f->buff_pos % CACHE_SIZE == 0)
+        {
+            // fetch the cache from disk
+            int n = io300_fetch(f);
+            if(n == -1 || n == 0)
+            {
+                return n;
+            }
         }
     }
 
@@ -239,6 +281,12 @@ int io300_readc(struct io300_file* const f) {
     if(f->logical_file_pos >= f->buff_end)
     {
         return -1;
+    }
+
+    if(f->is_dir_reverse == 1)
+    {
+        unsigned char c = (unsigned char)f->cache[f->buff_pos];
+        return c;
     }
 
     unsigned char c = (unsigned char)f->cache[f->buff_pos++];
@@ -431,6 +479,7 @@ int io300_flush(struct io300_file* const f) {
     f->logical_file_pos = f->buff_start;
     f->buff_pos = 0;
     f->is_dirty = 0;
+    f->original_file_size = io300_filesize(f);
     return n;
 }
 
@@ -439,6 +488,30 @@ int io300_fetch(struct io300_file* const f) {
     /* This helper should contain the logic for fetching data from the file into the cache. */
     /* Think about how you can use this helper to refactor out some of the logic in your read, write, and seek functions! */
     /* Feel free to add arguments if needed. */
+
+    if(f->is_dir_reverse == 1)
+    {
+        // It means we are at the end of the file and caching in forward direction does not make sense.
+        int valid_chars_left = f->logical_file_pos >= CACHE_SIZE ? CACHE_SIZE : f->logical_file_pos + 1;
+        off_t seek_pos = f->logical_file_pos >= CACHE_SIZE ? f->logical_file_pos - CACHE_SIZE + 1: 0;
+        off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+        if(pos == -1)
+        {
+            return -1;
+        }
+
+        int n = read(f->fd, f->cache, valid_chars_left);
+        if(n == -1 || n == 0)
+        {
+            return -1;
+        }
+        // if we get 0, it means we have reached the EOF and in this case return -1.
+        f->buff_start = f->logical_file_pos - n + 1;
+        f->buff_end = f->buff_start + n;
+        f->buff_pos = n - 1;
+        return n;
+    }
+
     int n = read(f->fd, f->cache, CACHE_SIZE);
 
     // if we get 0, it means we have reached the EOF and in this case return -1.
