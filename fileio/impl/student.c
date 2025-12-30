@@ -186,7 +186,7 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
         f->logical_file_pos = pos;
     }
     else {
-        f->buff_pos = pos < f->buff_start ? 0 : pos - f->buff_start;
+        f->buff_pos = pos - f->buff_start;
         f->logical_file_pos = pos;
     }
 
@@ -377,11 +377,27 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
             {
                 return -1;
             }
+
+            uint original_pos = f->logical_file_pos;
+            uint boundary_found = 0;
+            if(f->is_dir_reverse == 1 && sz > 1 && (original_pos != f->original_file_size - 1 && original_pos != f->original_file_size))
+            {
+                f->logical_file_pos += sz;
+                boundary_found = 1;
+            }
+
             int n = io300_fetch(f);
             if(n == 0 || n == -1)
             {
                 return 0;
             }
+
+            if(boundary_found == 1)
+            {
+                f->logical_file_pos = original_pos;
+                f->buff_pos -= sz;
+            }
+
             valid_last_byte_index = n;
             // In this case setting this variable to the number of bytes read.
         }
@@ -390,12 +406,23 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
 
     // It might be possible that cache has only 3 valid bytes left with buff end = 3 and buff pos = 0, reading more than 3 bytes will give garbage data, so need to have a check of valid bytes return. It's not always possible to return sz bytes correctly from cache.
     int valid_read = sz;
-    if (sz > valid_last_byte_index - f->buff_pos) {
-        valid_read = valid_last_byte_index - f->buff_pos;
+    if(f->is_dir_reverse == 1)
+    {
+        valid_last_byte_index -= 1;
+        if(f->buff_pos > valid_last_byte_index)
+        {
+            valid_read = 0;
+        }
+        memcpy(buff, &f->cache[f->buff_pos], valid_read);
     }
-    memcpy(buff, &f->cache[f->buff_pos], valid_read);
-    f->buff_pos += valid_read;
-    f->logical_file_pos += valid_read;
+    else {
+        if (sz > valid_last_byte_index - f->buff_pos) {
+            valid_read = valid_last_byte_index - f->buff_pos;
+        }
+        memcpy(buff, &f->cache[f->buff_pos], valid_read);
+        f->buff_pos += valid_read;
+        f->logical_file_pos += valid_read;
+    }
     return (ssize_t)valid_read;
 }
 
@@ -506,9 +533,9 @@ int io300_fetch(struct io300_file* const f) {
             return -1;
         }
         // if we get 0, it means we have reached the EOF and in this case return -1.
-        f->buff_start = f->logical_file_pos - n + 1;
+        f->buff_start = seek_pos;
         f->buff_end = f->buff_start + n;
-        f->buff_pos = n - 1;
+        f->buff_pos = f->logical_file_pos - f->buff_start;
         return n;
     }
 
