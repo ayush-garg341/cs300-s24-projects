@@ -55,6 +55,7 @@ struct io300_file {
     uint original_file_size;
     unsigned short int is_dir_reverse;
     unsigned short int backward_seek_count;
+    uint internal_file_offset;
 
     /* Used for debugging, keep track of which io300_file is which */
     char* description;
@@ -143,6 +144,7 @@ struct io300_file* io300_open(const char* const path, char* description) {
     ret->stats.read_calls = 0;
     ret->stats.write_calls = 0;
     ret->stats.seeks = 0;
+    ret->internal_file_offset = 0;
 
     check_invariants(ret);
     dbg(ret, "Just finished initializing file from path: %s\n", path);
@@ -194,6 +196,7 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
     {
         f->is_dir_reverse = 1;
     }
+    f->internal_file_offset = pos;
     return lseek(f->fd, pos, SEEK_SET);
 }
 
@@ -352,10 +355,13 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
         {
             // Change the kernel file pointer to correct offset.
             off_t seek_pos = (off_t)f->logical_file_pos;
-            off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
-            if(pos == -1)
-            {
-                return -1;
+            if(f->internal_file_offset != seek_pos) {
+                off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+                if(pos == -1)
+                {
+                    return -1;
+                }
+                f->internal_file_offset = pos;
             }
             int n = read(f->fd, buff, sz);
             if(n == 0 || n == -1)
@@ -366,18 +372,22 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
             f->buff_start = f->logical_file_pos;
             f->buff_end = f->buff_start;
             f->buff_pos = 0;
+            f->internal_file_offset = f->logical_file_pos;
             return n;
         }
         else {
             // First populate the cache and then return from it.
             // Change the kernel file pointer to correct offset.
             off_t seek_pos = (off_t)f->logical_file_pos;
-            off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
-            if(pos == -1)
-            {
-                return -1;
-            }
+            if(f->internal_file_offset != seek_pos) {
 
+                off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+                if(pos == -1)
+                {
+                    return -1;
+                }
+                f->internal_file_offset = pos;
+            }
             uint original_pos = f->logical_file_pos;
             uint boundary_found = 0;
             if(f->is_dir_reverse == 1 && sz > 1 && (original_pos != f->original_file_size - 1 && original_pos != f->original_file_size))
@@ -450,10 +460,13 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
         {
             // Write directly into a file and invalidate the cache by seeking to correct pos
             off_t seek_pos = (off_t)f->logical_file_pos;
-            off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
-            if(pos == -1)
-            {
-                return -1;
+            if(f->internal_file_offset != seek_pos) {
+                off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+                if(pos == -1)
+                {
+                    return -1;
+                }
+                f->internal_file_offset = pos;
             }
             int n = write(f->fd, buff, sz);
             if(n == 0 || n == -1)
@@ -464,15 +477,19 @@ ssize_t io300_write(struct io300_file* const f, const char* buff,
             f->logical_file_pos += n;
             f->buff_start = f->logical_file_pos;
             f->buff_end = f->buff_start;
+            f->internal_file_offset = f->logical_file_pos;
             return n;
         }
         else {
             // Write into cache by seeking into correct position
             off_t seek_pos = (off_t)f->logical_file_pos;
-            off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
-            if(pos == -1)
-            {
-                return -1;
+            if(f->internal_file_offset != seek_pos) {
+                off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+                if(pos == -1)
+                {
+                    return -1;
+                }
+                f->internal_file_offset = pos;
             }
             f->buff_pos = 0;
             f->buff_start = f->logical_file_pos;
@@ -492,9 +509,12 @@ int io300_flush(struct io300_file* const f) {
     check_invariants(f);
     off_t seek_pos = (off_t)f->buff_start;
     off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
-    if(pos == -1)
-    {
-        return -1;
+    if(f->internal_file_offset != seek_pos) {
+        if(pos == -1)
+        {
+            return -1;
+        }
+        f->internal_file_offset = pos;
     }
     int n = write(f->fd, f->cache, f->buff_pos);
     if(n == -1)
@@ -506,6 +526,7 @@ int io300_flush(struct io300_file* const f) {
     f->logical_file_pos = f->buff_start;
     f->buff_pos = 0;
     f->is_dirty = 0;
+    f->internal_file_offset = f->logical_file_pos;
     f->original_file_size = io300_filesize(f);
     return n;
 }
@@ -521,10 +542,13 @@ int io300_fetch(struct io300_file* const f) {
         // It means we are at the end of the file and caching in forward direction does not make sense.
         int valid_chars_left = f->logical_file_pos >= CACHE_SIZE ? CACHE_SIZE : f->logical_file_pos + 1;
         off_t seek_pos = f->logical_file_pos >= CACHE_SIZE ? f->logical_file_pos - CACHE_SIZE + 1: 0;
-        off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
-        if(pos == -1)
-        {
-            return -1;
+        if(f->internal_file_offset != seek_pos) {
+            off_t pos = lseek(f->fd, seek_pos, SEEK_SET);
+            if(pos == -1)
+            {
+                return -1;
+            }
+            f->internal_file_offset = pos;
         }
 
         int n = read(f->fd, f->cache, valid_chars_left);
@@ -536,6 +560,7 @@ int io300_fetch(struct io300_file* const f) {
         f->buff_start = seek_pos;
         f->buff_end = f->buff_start + n;
         f->buff_pos = f->logical_file_pos - f->buff_start;
+        f->internal_file_offset = f->buff_end;
         return n;
     }
 
@@ -549,5 +574,6 @@ int io300_fetch(struct io300_file* const f) {
     f->buff_pos = 0;
     f->buff_start = f->logical_file_pos;
     f->buff_end = f->buff_start + n;
+    f->internal_file_offset = f->buff_end;
     return n;
 }
