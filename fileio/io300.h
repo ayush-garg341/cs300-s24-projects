@@ -77,8 +77,11 @@ ssize_t io300_write(struct io300_file* f, const char* buff, size_t nbytes);
 int io300_flush(struct io300_file* f);
 
 /*
-   Fetch data from disk into RAM ( cache )
+   Fetch data from file into RAM.
 */
 int io300_fetch(struct io300_file* f);
+
+
+int io300_adaptive_fetch(struct io300_file* f);
 
 #endif
