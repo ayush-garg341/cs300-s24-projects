@@ -360,6 +360,15 @@ uintptr_t syscall(regstate* regs) {
 int syscall_page_alloc(uintptr_t addr) {
     assert(addr % PAGESIZE == 0);
     assert(!pages[addr / PAGESIZE].used());
+
+    if(addr >= KERNEL_START_ADDR && addr < PROC_START_ADDR)
+    {
+      if(addr != CONSOLE_ADDR)
+      {
+          return -1;
+      }
+    }
+
     // Currently we're simply using the physical page that has the same address
     // as `addr` (which is a virtual address).
     pages[addr / PAGESIZE].refcount = 1;
