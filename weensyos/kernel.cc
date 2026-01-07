@@ -164,7 +164,32 @@ void process_setup(pid_t pid, const char* program_name) {
 
     // Initialize this process's page table. Notice how we are currently
     // sharing the kernel's page table.
-    ptable[pid].pagetable = kernel_pagetable;
+    x86_64_pagetable* process_pagetable = (x86_64_pagetable*)kalloc(PAGESIZE);
+    if(!process_pagetable)
+    {
+      log_printf("kalloc failed!\n");
+      return;
+    }
+    memset(process_pagetable, 0x00, PAGESIZE);
+
+    for (vmiter it(kernel_pagetable, KERNEL_START_ADDR); it.va() < PROC_START_ADDR; it += PAGESIZE) {
+        uintptr_t va = it.va();
+        uint64_t perm = it.perm();
+        // log_printf("Page: %p, User permission: %d\n",it.va(), it.user());
+        vmiter process_it(process_pagetable, it.va());
+        process_it.map(it.pa(), it.perm());
+    }
+
+    uintptr_t start_addr = PROC_START_ADDR + (PROC_SIZE * (pid - 1));
+    for(vmiter it(kernel_pagetable, start_addr); it.va() < start_addr + PROC_SIZE; it+= PAGESIZE)
+    {
+        uintptr_t va = it.va();
+        uint64_t perm = it.perm();
+        vmiter process_it(process_pagetable, it.va());
+        process_it.map(it.pa(), it.perm());
+    }
+
+    ptable[pid].pagetable = process_pagetable;
 
     // Initialize `program_loader`.
     // The `program_loader` is an iterator that visits segments of executables.
