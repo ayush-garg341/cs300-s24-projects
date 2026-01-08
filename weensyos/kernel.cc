@@ -77,6 +77,10 @@ void kernel(const char* command) {
               it.map(it.va(), PTE_P | PTE_W);
           }
         }
+        else if(it.va() < KERNEL_START_ADDR && it.va() > 0)
+        {
+            it.map(it.va(), PTE_P | PTE_W);
+        }
         else if (it.va() != 0) {
             it.map(it.va(), PTE_P | PTE_W | PTE_U);
         } else {
@@ -172,7 +176,7 @@ void process_setup(pid_t pid, const char* program_name) {
     }
     memset(process_pagetable, 0x00, PAGESIZE);
 
-    for (vmiter it(kernel_pagetable, KERNEL_START_ADDR); it.va() < PROC_START_ADDR; it += PAGESIZE) {
+    for (vmiter it(kernel_pagetable); it.va() < PROC_START_ADDR; it += PAGESIZE) {
         uintptr_t va = it.va();
         uint64_t perm = it.perm();
         // log_printf("Page: %p, User permission: %d\n",it.va(), it.user());
