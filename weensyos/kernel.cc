@@ -242,7 +242,7 @@ void process_setup(pid_t pid, const char* program_name) {
 
     // Step 1: Calculate virtual address for stack
     // We also need to allocate a page for the stack.
-    uintptr_t stack_addr = PROC_START_ADDR + PROC_SIZE * pid - PAGESIZE;
+    uintptr_t stack_addr = MEMSIZE_VIRTUAL - PAGESIZE;
     // Step 2: Allocate a NEW physical page for the stack
     void* stack_pa = kalloc(PAGESIZE);
     if (!stack_pa) {
@@ -455,7 +455,7 @@ int syscall_page_alloc(uintptr_t addr) {
 
     // Zero the page
     // In process address space, already have the mapping for VA -> PA.
-    memset((void*)addr, 0, PAGESIZE);
+    memset((void*)pa, 0, PAGESIZE);
 
     return 0;
 }
