@@ -67,7 +67,7 @@ void kernel(const char* command) {
 
     // (re-)Initialize the kernel page table.
     for (vmiter it(kernel_pagetable); it.va() < MEMSIZE_PHYSICAL; it += PAGESIZE) {
-        if (it.va() >= KERNEL_START_ADDR && it.va() < PROC_START_ADDR)
+        if (it.va() > 0 && it.va() < PROC_START_ADDR)
         {
           if(it.va() == CONSOLE_ADDR)
           {
@@ -76,10 +76,6 @@ void kernel(const char* command) {
           else{
               it.map(it.va(), PTE_P | PTE_W);
           }
-        }
-        else if(it.va() < KERNEL_START_ADDR && it.va() > 0)
-        {
-            it.map(it.va(), PTE_P | PTE_W);
         }
         else if (it.va() != 0) {
             it.map(it.va(), PTE_P | PTE_W | PTE_U);
