@@ -52,6 +52,7 @@ void memshow();
 //    string is an optional string passed from the boot loader.
 
 static void process_setup(pid_t pid, const char* program_name);
+void copy_mappings(x86_64_pagetable* dst, x86_64_pagetable* src);
 
 void kernel(const char* command) {
     // Initialize hardware.
@@ -193,7 +194,10 @@ void process_setup(pid_t pid, const char* program_name) {
              a < loader.va() + loader.size();
              a += PAGESIZE) {
             vmiter kernel_it(kernel_pagetable, a);
-            int perm = kernel_it.perm();
+
+            // these perm are coming from kernel mapping where we are setting 
+            // PTE_P | PTE_U | PTE_W for user process address space pages.
+            int perm = kernel_it.perm(); 
 
             // Allocate a NEW physical page
             void* pa = kalloc(PAGESIZE);
@@ -206,10 +210,6 @@ void process_setup(pid_t pid, const char* program_name) {
             vmiter it(process_pagetable, a);
             it.map((uintptr_t)pa, perm);
             pages[(uintptr_t)pa / PAGESIZE].refcount = 1;
-            log_printf("Process %d: VA 0x%lx -> PA 0x%lx (perm: %s%s)\n",
-                      pid, a, (uintptr_t)pa,
-                      (perm & PTE_W) ? "W" : "R",
-                      (perm & PTE_U) ? "U" : "K");
 
             // `a` is the virtual address of the current segment's page.
             // assert(!pages[a / PAGESIZE].used());
@@ -225,10 +225,43 @@ void process_setup(pid_t pid, const char* program_name) {
     // Kernel page table have only identity mapping.
     set_pagetable(process_pagetable);
     // We now copy instructions and data into memory that we just allocated.
+    // Copy success only if page permission are writable.
     for (loader.reset(); loader.present(); ++loader) {
         memset((void*) loader.va(), 0, loader.size());
         memcpy((void*) loader.va(), loader.data(), loader.data_size());
     }
+
+    // Changing the permissions here to readble only for the pages which are not writable.
+    for (loader.reset(); loader.present(); ++loader) {
+        // Determine correct permissions
+        int perm = PTE_P | PTE_U;
+        
+        if (loader.writable()) {
+            perm |= PTE_W;  // Keep writable for data/bss
+        }
+        // Otherwise, remove write permission (code becomes read-only)
+        
+        // Update permissions for all pages in this segment
+        for (uintptr_t va = round_down(loader.va(), PAGESIZE);
+             va < loader.va() + loader.size();
+             va += PAGESIZE) {
+
+            log_printf("Process %d: VA 0x%lx, writable: %d\n",
+                      pid, va, loader.writable());
+
+            vmiter it(process_pagetable, va);
+            
+            // Get current physical address
+            uintptr_t pa = it.pa();
+
+            log_printf("Process %d: VA 0x%lx, %s\n",
+                      pid, va, perm & PTE_W ? "Writable" : "Readable");
+            
+            // Remap with correct permissions
+            it.map(pa, perm);
+        }
+    }
+
     set_pagetable(kernel_pagetable);
 
     // Set %rip and mark the entry point of the code.
@@ -465,7 +498,36 @@ int syscall_page_alloc(uintptr_t addr) {
 //    implements the specification for `sys_fork` in `u-lib.hh`.
 pid_t syscall_fork() {
     // Implement for Step 5!
-    panic("Unexpected system call %ld!\n", SYSCALL_FORK);
+    // panic("Unexpected system call %ld!\n", SYSCALL_FORK);
+    pid_t free_slot = -1;
+    for (pid_t i = 1; i < NPROC; i++) {
+        if(ptable[i].state == P_FREE)
+        {
+          free_slot = i;
+          break;
+        }
+    }
+    
+    x86_64_pagetable* fork_process_pagetable = (x86_64_pagetable*)kalloc(PAGESIZE);
+    if(!fork_process_pagetable)
+    {
+      log_printf("kalloc failed!\n");
+      return -1;
+    }
+    memset(fork_process_pagetable, 0x00, PAGESIZE);
+
+    // copy mappings
+    copy_mappings(fork_process_pagetable, ptable[current->pid].pagetable);
+
+    ptable[free_slot].pid = free_slot;
+    ptable[free_slot].pagetable = fork_process_pagetable;
+    ptable[free_slot].state = P_RUNNABLE;
+
+    regstate fork_regs = ptable[current->pid].regs;
+    fork_regs.reg_rax = 0;
+    ptable[free_slot].regs = fork_regs;
+
+    return free_slot;
 }
 
 // syscall_exit()
@@ -551,4 +613,37 @@ void memshow() {
 
     extern void console_memviewer(proc* vmp);
     console_memviewer(p);
+}
+
+
+void copy_mappings(x86_64_pagetable *dst, x86_64_pagetable* src)
+{
+    for (vmiter it(src); it.va() < MEMSIZE_VIRTUAL; it += PAGESIZE) {
+        uintptr_t va = it.va();
+        uint64_t pa = it.pa();
+        uint64_t perm = it.perm();
+
+        if(it.user() && it.va() != CONSOLE_ADDR && it.writable())
+        {
+            log_printf("VA %p maps to PA %p with PERMS %p %p %p\n", it.va(), it.pa(), it.present(), it.writable(), it.user());
+            // allocate new page
+            void* fork_pa = kalloc(PAGESIZE);
+
+            // Zero the page
+            // In process address space, already have the mapping for VA -> PA.
+            memset(fork_pa, 0x00, PAGESIZE);
+
+            // Map it to the requested virtual address
+            vmiter(dst, va).map((uintptr_t)fork_pa, PTE_P | PTE_W | PTE_U);
+
+            // Mark physical page as used
+            pages[(uintptr_t)fork_pa / PAGESIZE].refcount = 1;
+
+            memcpy(fork_pa, (void *)pa, PAGESIZE);
+
+        }
+        else{
+          vmiter(dst, va).map(pa, perm);
+        }
+    }
 }
