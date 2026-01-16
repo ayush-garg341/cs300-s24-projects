@@ -52,7 +52,7 @@ void memshow();
 //    string is an optional string passed from the boot loader.
 
 static void process_setup(pid_t pid, const char* program_name);
-void copy_mappings(x86_64_pagetable* dst, x86_64_pagetable* src);
+int copy_mappings(x86_64_pagetable* dst, x86_64_pagetable* src);
 
 void kernel(const char* command) {
     // Initialize hardware.
@@ -122,13 +122,14 @@ void kernel(const char* command) {
 //    but it never reuses pages or supports freeing memory (you'll have to
 //    change this at some point).
 
-static uintptr_t next_alloc_pa;
+// static uintptr_t next_alloc_pa;
 
 void* kalloc(size_t sz) {
     if (sz > PAGESIZE) {
         return nullptr;
     }
 
+    uintptr_t next_alloc_pa = 0;
     while (next_alloc_pa < MEMSIZE_PHYSICAL) {
         uintptr_t pa = next_alloc_pa;
         next_alloc_pa += PAGESIZE;
@@ -150,8 +151,13 @@ void* kalloc(size_t sz) {
 
 void kfree(void* kptr) {
     // Placeholder code below - you will have to implement `kfree`!
-    (void) kptr;
-    assert(false);
+    // (void) kptr;
+    // assert(false);
+    if(kptr != nullptr && (uintptr_t)kptr != CONSOLE_ADDR)
+    {
+      assert(pages[(uintptr_t)kptr/PAGESIZE].used());
+      pages[(uintptr_t )kptr / PAGESIZE].refcount -= 1;
+    }
 }
 
 
@@ -517,7 +523,21 @@ pid_t syscall_fork() {
     memset(fork_process_pagetable, 0x00, PAGESIZE);
 
     // copy mappings
-    copy_mappings(fork_process_pagetable, ptable[current->pid].pagetable);
+    if(copy_mappings(fork_process_pagetable, ptable[current->pid].pagetable) == -1)
+    {
+      for (vmiter it(fork_process_pagetable); it.va() < MEMSIZE_VIRTUAL; it += PAGESIZE) {
+          if (it.present() && it.user()) {
+              kfree((void*)it.pa());  // Free the actual data page
+          }
+      }
+
+      // free all memory already allocated in copy mappings
+      for (ptiter it(fork_process_pagetable); it.active(); it.next()) {
+          kfree(it.kptr());
+      }
+      kfree(fork_process_pagetable);
+      return -1;
+    }
 
     ptable[free_slot].pid = free_slot;
     ptable[free_slot].pagetable = fork_process_pagetable;
@@ -534,8 +554,21 @@ pid_t syscall_fork() {
 //    Handles the SYSCALL_EXIT system call. This function
 //    implements the specification for `sys_exit` in `u-lib.hh`.
 void syscall_exit() {
-    // Implement for Step 7!
-    panic("Unexpected system call %ld!\n", SYSCALL_EXIT);
+    proc *current_p = current;
+    pid_t pid = current_p->pid;
+    x86_64_pagetable *pt = current_p->pagetable;
+    for (vmiter it(pt); it.va() < MEMSIZE_VIRTUAL; it += PAGESIZE) {
+        if (it.present() && it.user()) {
+            kfree((void*)it.pa());  // Free the actual data page
+        }
+    }
+
+    for (ptiter it(pt); it.active(); it.next()) {
+        kfree(it.kptr());
+    }
+    kfree(pt);
+    current_p->pagetable = nullptr;
+    current_p->state = P_FREE;
 }
 
 // schedule
@@ -616,7 +649,7 @@ void memshow() {
 }
 
 
-void copy_mappings(x86_64_pagetable *dst, x86_64_pagetable* src)
+int copy_mappings(x86_64_pagetable *dst, x86_64_pagetable* src)
 {
     for (vmiter it(src); it.va() < MEMSIZE_VIRTUAL; it += PAGESIZE) {
         uintptr_t va = it.va();
@@ -625,25 +658,40 @@ void copy_mappings(x86_64_pagetable *dst, x86_64_pagetable* src)
 
         if(it.user() && it.va() != CONSOLE_ADDR && it.writable())
         {
-            log_printf("VA %p maps to PA %p with PERMS %p %p %p\n", it.va(), it.pa(), it.present(), it.writable(), it.user());
+            // log_printf("VA %p maps to PA %p with PERMS %p %p %p\n", it.va(), it.pa(), it.present(), it.writable(), it.user());
             // allocate new page
             void* fork_pa = kalloc(PAGESIZE);
+            if(!fork_pa)
+            {
+              return -1;
+            }
 
             // Zero the page
             // In process address space, already have the mapping for VA -> PA.
             memset(fork_pa, 0x00, PAGESIZE);
 
             // Map it to the requested virtual address
-            vmiter(dst, va).map((uintptr_t)fork_pa, PTE_P | PTE_W | PTE_U);
+            int r = vmiter(dst, va).try_map((uintptr_t)fork_pa, PTE_P | PTE_W | PTE_U);
+            if(r == -1)
+            {
+              return -1;
+            }
 
             // Mark physical page as used
             pages[(uintptr_t)fork_pa / PAGESIZE].refcount = 1;
-
             memcpy(fork_pa, (void *)pa, PAGESIZE);
 
         }
         else{
-          vmiter(dst, va).map(pa, perm);
+          if(it.present() && it.user() && it.va() != CONSOLE_ADDR)
+          {
+            log_printf("VA %p maps to PA %p with PERMS %p %p %p\n", it.va(), it.pa(), it.present(), it.writable(), it.user());
+            pages[(uintptr_t)pa / PAGESIZE].refcount += 1;
+          }
+          int r = vmiter(dst, va).try_map(pa, perm);
+          if(r == -1)
+            return -1;
         }
     }
+    return 0;
 }
