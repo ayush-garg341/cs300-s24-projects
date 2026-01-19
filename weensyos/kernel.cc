@@ -487,7 +487,12 @@ int syscall_page_alloc(uintptr_t addr) {
     }
 
     // Map it to the requested virtual address
-    it.map((uintptr_t)pa, PTE_P | PTE_W | PTE_U);
+    int r = it.try_map((uintptr_t)pa, PTE_P | PTE_W | PTE_U);
+    if(r == -1)
+    {
+      kfree(pa);
+      return -1;
+    }
 
     // Mark physical page as used
     pages[(uintptr_t)pa / PAGESIZE].refcount = 1;
@@ -513,11 +518,15 @@ pid_t syscall_fork() {
           break;
         }
     }
+
+    if (free_slot == -1) {
+        return -1;  // No free process slots
+    }
     
     x86_64_pagetable* fork_process_pagetable = (x86_64_pagetable*)kalloc(PAGESIZE);
     if(!fork_process_pagetable)
     {
-      log_printf("kalloc failed!\n");
+      log_printf("kalloc failed in fork!\n");
       return -1;
     }
     memset(fork_process_pagetable, 0x00, PAGESIZE);
@@ -558,7 +567,7 @@ void syscall_exit() {
     pid_t pid = current_p->pid;
     x86_64_pagetable *pt = current_p->pagetable;
     for (vmiter it(pt); it.va() < MEMSIZE_VIRTUAL; it += PAGESIZE) {
-        if (it.present() && it.user()) {
+        if (it.present() && it.user() && it.va() != CONSOLE_ADDR) {
             kfree((void*)it.pa());  // Free the actual data page
         }
     }
@@ -652,6 +661,10 @@ void memshow() {
 int copy_mappings(x86_64_pagetable *dst, x86_64_pagetable* src)
 {
     for (vmiter it(src); it.va() < MEMSIZE_VIRTUAL; it += PAGESIZE) {
+        if (!it.present()) {
+            continue;
+        }
+
         uintptr_t va = it.va();
         uint64_t pa = it.pa();
         uint64_t perm = it.perm();
@@ -677,20 +690,19 @@ int copy_mappings(x86_64_pagetable *dst, x86_64_pagetable* src)
               return -1;
             }
 
-            // Mark physical page as used
-            pages[(uintptr_t)fork_pa / PAGESIZE].refcount = 1;
             memcpy(fork_pa, (void *)pa, PAGESIZE);
 
         }
         else{
-          if(it.present() && it.user() && it.va() != CONSOLE_ADDR)
-          {
-            log_printf("VA %p maps to PA %p with PERMS %p %p %p\n", it.va(), it.pa(), it.present(), it.writable(), it.user());
-            pages[(uintptr_t)pa / PAGESIZE].refcount += 1;
-          }
           int r = vmiter(dst, va).try_map(pa, perm);
           if(r == -1)
             return -1;
+
+          if(it.present() && it.user() && it.va() != CONSOLE_ADDR)
+          {
+            // log_printf("VA %p maps to PA %p with PERMS %p %p %p\n", it.va(), it.pa(), it.present(), it.writable(), it.user());
+            pages[(uintptr_t)pa / PAGESIZE].refcount += 1;
+          }
         }
     }
     return 0;
