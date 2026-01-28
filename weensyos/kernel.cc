@@ -129,19 +129,25 @@ void* kalloc(size_t sz) {
         return nullptr;
     }
 
-    uintptr_t next_alloc_pa = 0;
-    while (next_alloc_pa < MEMSIZE_PHYSICAL) {
+    static uintptr_t next_alloc_pa = 0;  // ← ADD STATIC!
+    uintptr_t start_pa = next_alloc_pa;
+    
+    do {
         uintptr_t pa = next_alloc_pa;
         next_alloc_pa += PAGESIZE;
+        
+        if (next_alloc_pa >= MEMSIZE_PHYSICAL) {
+            next_alloc_pa = 0;  // Wrap around
+        }
 
-        if (allocatable_physical_address(pa)
-            && !pages[pa / PAGESIZE].used()) {
+        if (allocatable_physical_address(pa) && !pages[pa / PAGESIZE].used()) {
             pages[pa / PAGESIZE].refcount = 1;
             memset((void*) pa, 0xCC, PAGESIZE);
             return (void*) pa;
         }
-    }
-    return nullptr;
+    } while (next_alloc_pa != start_pa);  // Stop when we've wrapped around
+    
+    return nullptr;  // Out of memory
 }
 
 
@@ -215,7 +221,6 @@ void process_setup(pid_t pid, const char* program_name) {
             memset(pa, 0x00, PAGESIZE);
             vmiter it(process_pagetable, a);
             it.map((uintptr_t)pa, perm);
-            pages[(uintptr_t)pa / PAGESIZE].refcount = 1;
 
             // `a` is the virtual address of the current segment's page.
             // assert(!pages[a / PAGESIZE].used());
@@ -294,9 +299,6 @@ void process_setup(pid_t pid, const char* program_name) {
     // Step 3: Map the virtual address to the physical page we just allocated
     vmiter stack_it(process_pagetable, stack_addr);
     stack_it.map((uintptr_t)stack_pa, PTE_P | PTE_W | PTE_U);
-
-    // Step 4: Mark the PHYSICAL page as used
-    pages[(uintptr_t)stack_pa / PAGESIZE].refcount = 1;
 
     // Step 5: Zero the stack (optional but good practice)
     memset(stack_pa, 0x00, PAGESIZE);
@@ -493,9 +495,6 @@ int syscall_page_alloc(uintptr_t addr) {
       kfree(pa);
       return -1;
     }
-
-    // Mark physical page as used
-    pages[(uintptr_t)pa / PAGESIZE].refcount = 1;
 
     // Zero the page
     // In process address space, already have the mapping for VA -> PA.
