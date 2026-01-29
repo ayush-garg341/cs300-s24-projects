@@ -733,7 +733,7 @@ void error_printf(const char* format, ...) {
 
 int check_keyboard() {
     int c = keyboard_readc();
-    if (c == 'a' || c == 'f' || c == 'e' || c == 'k') {
+    if (c == 'a' || c == 'f' || c == 'e' || c == 'k' || c == 's') {
         // Turn off the timer interrupt.
         init_timer(-1);
         // Install a temporary page table to carry us through the
@@ -757,6 +757,9 @@ int check_keyboard() {
         }
         if (c == 'k') {
           argument = "kill";
+        }
+        if(c == 's') {
+          argument = "sleep";
         }
         uintptr_t argument_ptr = (uintptr_t) argument;
         assert(argument_ptr < 0x100000000L);
@@ -855,6 +858,8 @@ extern uint8_t _binary_obj_p_forkexit_start[];
 extern uint8_t _binary_obj_p_forkexit_end[];
 extern uint8_t _binary_obj_p_kill_start[];
 extern uint8_t _binary_obj_p_kill_end[];
+extern uint8_t _binary_obj_p_sleep_start[];
+extern uint8_t _binary_obj_p_sleep_end[];
 
 struct ramimage {
     const char* name;
@@ -867,7 +872,8 @@ struct ramimage {
     { "allocator4", _binary_obj_p_allocator4_start, _binary_obj_p_allocator4_end },
     { "fork", _binary_obj_p_fork_start, _binary_obj_p_fork_end },
     { "forkexit", _binary_obj_p_forkexit_start, _binary_obj_p_forkexit_end },
-    { "kill", _binary_obj_p_kill_start, _binary_obj_p_kill_end}
+    { "kill", _binary_obj_p_kill_start, _binary_obj_p_kill_end},
+    { "sleep", _binary_obj_p_sleep_start, _binary_obj_p_sleep_end}
 };
 
 program_loader::program_loader(int program_number) {

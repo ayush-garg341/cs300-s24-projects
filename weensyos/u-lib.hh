@@ -76,6 +76,13 @@ inline int sys_kill() {
   return make_syscall(SYSCALL_KILL);
 }
 
+// sys_sleep
+// Sleeping the current process for 100 ticks.
+inline int sys_sleep()
+{
+  return make_syscall(SYSCALL_SLEEP);
+}
+
 // sys_fork()
 //    Fork the current process. On success, return the child's process ID to
 //    the parent, and return 0 to the child. On failure, return -1.

@@ -405,6 +405,7 @@ int syscall_page_alloc(uintptr_t addr);
 pid_t syscall_fork();
 void syscall_exit();
 void syscall_kill();
+void syscall_sleep();
 
 uintptr_t syscall(regstate* regs) {
     // Copy the saved registers into the `current` process descriptor.
@@ -448,6 +449,10 @@ uintptr_t syscall(regstate* regs) {
 
     case SYSCALL_KILL:
         syscall_kill();
+        schedule();
+
+    case SYSCALL_SLEEP:
+        syscall_sleep();
         schedule();
 
     default:
@@ -564,6 +569,19 @@ pid_t syscall_fork() {
     return free_slot;
 }
 
+// syscall_sleep()
+// Handles the SYSCALL_SLEEP system call. This function
+// implements the specification for `sys_sleep` in `u-lib.hh`
+void syscall_sleep()
+{
+
+  proc *current_p = current;
+  pid_t pid = current_p->pid;
+  log_printf("the sleeping process is %d\n", pid);
+  current_p->state = P_SLEEPING;
+  current_p->wakeup_time = ticks + SLEEPING_TIME;
+}
+
 // syscall_kill()
 // Handles the SYSCALL_KILL system call. This function
 // implements the specification for `sys_kill` in `u-lib.hh`
@@ -574,7 +592,6 @@ void syscall_kill() {
     // Parent Kills Children, Sibling Kills Sibling, Child Kills Parent
     proc *current_p = current;
     pid_t pid = current_p->pid;
-    log_printf("Killing current process with pid: %d\n", pid);
     syscall_exit();
 }
 
@@ -605,6 +622,15 @@ void syscall_exit() {
 //    You should *not* have to edit this function.
 
 void schedule() {
+    
+    for (pid_t i = 0; i < NPROC; i++) {
+        if(ptable[i].state == P_SLEEPING && ticks >= ptable[i].wakeup_time)
+        {
+          ptable[i].state = P_RUNNABLE;
+          ptable[i].wakeup_time = 0;
+        }
+    }
+
     pid_t pid = current->pid;
     for (unsigned spins = 1; true; ++spins) {
         pid = (pid + 1) % NPROC;
@@ -618,7 +644,7 @@ void schedule() {
         // If spinning forever, show the memviewer.
         if (spins % (1 << 12) == 0) {
             memshow();
-            log_printf("%u\n", spins);
+            // log_printf("%u\n", spins);
         }
     }
 }

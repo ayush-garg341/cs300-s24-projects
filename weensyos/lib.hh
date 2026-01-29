@@ -217,6 +217,7 @@ inline uint32_t crc32c(const void* buf, size_t sz) {
 #define SYSCALL_FORK            5
 #define SYSCALL_EXIT            6
 #define SYSCALL_KILL            7
+#define SYSCALL_SLEEP           8
 
 
 // CGA console printing

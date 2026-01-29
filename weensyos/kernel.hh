@@ -19,6 +19,7 @@ struct elf_program;
 #define P_RUNNABLE  1                   // runnable process
 #define P_BLOCKED   2                   // blocked process
 #define P_BROKEN    3                   // faulted process
+#define P_SLEEPING  4                   // sleeping process
 
 // Process descriptor type
 struct proc {
@@ -26,6 +27,7 @@ struct proc {
     pid_t pid;                          // process ID
     int state;                          // process state (see above)
     regstate regs;                      // process's current registers
+    unsigned long int wakeup_time;
     // The first 4 members of `proc` must not change, but you can add more.
 };
 
@@ -33,6 +35,7 @@ struct proc {
 #define NPROC 16                // maximum number of processes
 extern proc ptable[NPROC];
 
+#define SLEEPING_TIME 1000      // sleeping for 100 ticks
 
 // Kernel start address
 #define KERNEL_START_ADDR       0x40000
