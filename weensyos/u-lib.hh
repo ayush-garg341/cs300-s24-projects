@@ -70,6 +70,12 @@ inline int sys_page_alloc(void* addr) {
     return make_syscall(SYSCALL_PAGE_ALLOC, (uintptr_t) addr);
 }
 
+// sys_kill(pid)
+// After the process runs out of memory, kill the current process.
+inline int sys_kill() {
+  return make_syscall(SYSCALL_KILL);
+}
+
 // sys_fork()
 //    Fork the current process. On success, return the child's process ID to
 //    the parent, and return 0 to the child. On failure, return -1.

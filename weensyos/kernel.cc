@@ -98,6 +98,7 @@ void kernel(const char* command) {
         process_setup(2, "allocator2");
         process_setup(3, "allocator3");
         process_setup(4, "allocator4");
+        process_setup(5, "kill");
     }
 
     // Switch to the first process using run().
@@ -403,6 +404,7 @@ void exception(regstate* regs) {
 int syscall_page_alloc(uintptr_t addr);
 pid_t syscall_fork();
 void syscall_exit();
+void syscall_kill();
 
 uintptr_t syscall(regstate* regs) {
     // Copy the saved registers into the `current` process descriptor.
@@ -443,6 +445,10 @@ uintptr_t syscall(regstate* regs) {
     case SYSCALL_EXIT:
         syscall_exit();
         schedule(); // does not return
+
+    case SYSCALL_KILL:
+        syscall_kill();
+        schedule();
 
     default:
         panic("Unexpected system call %ld!\n", regs->reg_rax);
@@ -556,6 +562,20 @@ pid_t syscall_fork() {
     ptable[free_slot].regs = fork_regs;
 
     return free_slot;
+}
+
+// syscall_kill()
+// Handles the SYSCALL_KILL system call. This function
+// implements the specification for `sys_kill` in `u-lib.hh`
+void syscall_kill() {
+    
+    // Currently we are killing the current running process.
+    // We can kill any other process if we want at random.
+    // Parent Kills Children, Sibling Kills Sibling, Child Kills Parent
+    proc *current_p = current;
+    pid_t pid = current_p->pid;
+    log_printf("Killing current process with pid: %d\n", pid);
+    syscall_exit();
 }
 
 // syscall_exit()
