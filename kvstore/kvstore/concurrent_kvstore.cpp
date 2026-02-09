@@ -7,6 +7,7 @@ bool ConcurrentKvStore::Get(const GetRequest* req, GetResponse* res) {
     // TODO (Part A, Step 3 and Step 4): Implement!
 
     size_t b = this->store.bucket(req->key);
+    std::shared_lock lock(this->store.locks[b]);
     auto result = this->store.getIfExists(b, req->key);
     if(result == std::nullopt)
     {
@@ -20,6 +21,7 @@ bool ConcurrentKvStore::Put(const PutRequest* req, PutResponse*) {
     // TODO (Part A, Step 3 and Step 4): Implement!
 
     size_t b = this->store.bucket(req->key);
+    std::unique_lock lock(this->store.locks[b]);
     this->store.insertItem(b, req->key, req->value);
     return true;
 }
@@ -27,13 +29,17 @@ bool ConcurrentKvStore::Put(const PutRequest* req, PutResponse*) {
 bool ConcurrentKvStore::Append(const AppendRequest* req, AppendResponse*) {
     // TODO (Part A, Step 3 and Step 4): Implement!
     size_t b = this->store.bucket(req->key);
+    std::unique_lock lock(this->store.locks[b]);
     auto result = this->store.getIfExists(b, req->key);
-    if(result == std::nullopt)
+    std::string new_value;
+    if(!result)
     {
-        result->value = "";
+        new_value = req->value;
     }
-    result->value += req->value;
-    this->store.insertItem(b, req->key, result->value);
+    else {
+        new_value = result->value + req->value;
+    }
+    this->store.insertItem(b, req->key, new_value);
     return true;
 }
 
@@ -41,6 +47,7 @@ bool ConcurrentKvStore::Delete(const DeleteRequest* req, DeleteResponse* res) {
     // TODO (Part A, Step 3 and Step 4): Implement!
 
     size_t b = this->store.bucket(req->key);
+    std::unique_lock lock(this->store.locks[b]);
     auto result = this->store.getIfExists(b, req->key);
     if(result == std::nullopt) {
         return false;
@@ -54,6 +61,16 @@ bool ConcurrentKvStore::MultiGet(const MultiGetRequest* req,
                                  MultiGetResponse* res) {
     // TODO (Part A, Step 3 and Step 4): Implement!
     res->values.clear();
+
+    std::vector<size_t> ids;
+    for (auto& k : req->keys)
+        ids.push_back(this->store.bucket(k));
+
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    std::vector<std::shared_lock<std::shared_mutex>> guards;
+    for (auto b : ids)
+        guards.emplace_back(this->store.locks[b]);
 
     for(size_t i = 0; i < req->keys.size(); ++i)
     {
@@ -77,6 +94,16 @@ bool ConcurrentKvStore::MultiPut(const MultiPutRequest* req,
         return false;
     }
 
+    std::vector<size_t> ids;
+    for (auto& k : req->keys)
+        ids.push_back(this->store.bucket(k));
+
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    std::vector<std::unique_lock<std::shared_mutex>> guards;
+    for (auto b : ids)
+        guards.emplace_back(this->store.locks[b]);
+
     for(size_t i = 0; i < req->keys.size(); ++i)
     {
         auto key = req->keys[i];
@@ -91,6 +118,14 @@ bool ConcurrentKvStore::MultiPut(const MultiPutRequest* req,
 std::vector<std::string> ConcurrentKvStore::AllKeys() {
     // TODO (Part A, Step 3 and Step 4): Implement!
     std::vector<std::string> allkeys;
+
+    // 1. Lock ALL buckets in order (shared = readers)
+    std::vector<std::shared_lock<std::shared_mutex>> guards;
+    guards.reserve(this->store.buckets.size());
+    for (size_t i = 0; i < this->store.buckets.size(); ++i) {
+        guards.emplace_back(this->store.locks[i]);
+    }
+
     for (size_t i = 0; i < this->store.buckets.size(); ++i) {
         auto& bucket = this->store.buckets[i];
 
