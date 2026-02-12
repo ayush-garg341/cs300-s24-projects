@@ -79,6 +79,7 @@ bool ConcurrentKvStore::MultiGet(const MultiGetRequest* req,
         auto val_it = this->store.getIfExists(b, key);
         if(val_it == std::nullopt)
         {
+            res->values.clear();
             return false;
         }
         res->values.push_back(val_it->value);
