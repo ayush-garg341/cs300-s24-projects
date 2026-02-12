@@ -11,18 +11,16 @@ bool StaticShardController::Join(const JoinRequest* req, JoinResponse*) {
     // TODO (Part B, Step 1): Implement!
     //
     std::unique_lock lock(config_mtx);
-
-    cout_color(BLUE, "Added server ", req->server,
-               " to shardcontroller configuration.");
-
     std::string joining_server = req->server;
     auto it = this->config.server_to_shards.find(joining_server);
     if (it == this->config.server_to_shards.end()) {
-        this->config.server_to_shards[req->server] = std::vector<Shard> {};
+        this->config.server_to_shards[joining_server] = std::vector<Shard> {};
     }
     else {
         return false;
     }
+    cout_color(BLUE, "Added server ", req->server,
+               " to shardcontroller configuration.");
     return true;
 }
 

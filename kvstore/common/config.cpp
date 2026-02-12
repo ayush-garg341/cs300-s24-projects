@@ -3,28 +3,37 @@
 #include "common/color.hpp"
 
 std::string ShardControllerConfig::print() {
-  std::stringstream ss;
-  ss << "Shardcontroller configuration: \n";
-  for (auto&& [server, shards] : this->server_to_shards) {
-    ss << "- " << server << ": ";
-    for (auto&& s : shards) {
-      ss << s;
-      if (s != shards.back()) ss << ", ";
+    std::stringstream ss;
+    ss << "Shardcontroller configuration: \n";
+    for (auto&& [server, shards] : this->server_to_shards) {
+        ss << "- " << server << ": ";
+        for (auto&& s : shards) {
+            ss << s;
+            if (s != shards.back()) ss << ", ";
+        }
+        ss << '\n';
     }
-    ss << '\n';
-  }
-  return ss.str();
+    return ss.str();
 }
 
 std::optional<std::string> ShardControllerConfig::get_server(
     const std::string& key) {
-  std::string key_uppercase = to_upper(key);
-  // TODO (Part B, Step 2): Implement!
-  // You should use key_uppercase (instead of key) in your implementation
-  cerr_color(
-      RED,
-      "Shardcontroller config does not contain any server responsible for "
-      "the key ",
-      key);
-  return std::nullopt;
+    std::string key_uppercase = to_upper(key);
+    // TODO (Part B, Step 2): Implement!
+    // You should use key_uppercase (instead of key) in your implementation
+    for (auto& [server, shards] : server_to_shards) {
+        for (const auto& s : shards) {
+            if(s.contains(key_uppercase))
+            {
+                return server;
+            }
+        }
+    }
+
+    cerr_color(
+        RED,
+        "Shardcontroller config does not contain any server responsible for "
+        "the key ",
+        key);
+    return std::nullopt;
 }
